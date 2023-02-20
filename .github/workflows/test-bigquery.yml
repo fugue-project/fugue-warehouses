@@ -1,0 +1,41 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Test BigQuery
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+    - fugue_bigquery/**
+  pull_request:
+    branches: [ master ]
+    paths:
+    - fugue_bigquery/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-bigquery
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.8
+    - name: Install dependencies
+      run: |
+        make dev
+        pip install .[bigquery,ray]
+    - name: Test
+      run: make testbq
+      env:
+        FUGUE_GOOGLE_TEST_CRED: ${{secrets.FUGUE_GOOGLE_TEST_CRED}}
+    - name: "Upload coverage to Codecov"
+      uses: codecov/codecov-action@v3
+      with:
+        fail_ci_if_error: false

@@ -3,8 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to Fugue Data Warehouse Integrations!
-=================================
+Welcome to Fugue Data Warehouses Integration!
+=============================================
 
 .. toctree::
    :maxdepth: 3

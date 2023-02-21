@@ -39,4 +39,4 @@ testbq:
 lab:
 	mkdir -p tmp
 	pip install .
-	jupyter lab --port=8888 --ip=0.0.0.0 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'
+	jupyter lab --port=8000 --ip=0.0.0.0 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*'

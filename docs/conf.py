@@ -20,7 +20,7 @@ from fugue_warehouses_version import __version__
 
 # -- Project information -----------------------------------------------------
 
-project = "Fugue BigQuery Integration"
+project = "Fugue Data Warehouses Integration"
 version = __version__
 copyright = "2023, The Fugue Development Team"  # noqa: A001
 author = "The Fugue Development Team"

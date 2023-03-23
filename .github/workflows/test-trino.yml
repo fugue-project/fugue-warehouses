@@ -39,9 +39,3 @@ jobs:
         pip install .[trino]
     - name: Test
       run: make testtrino
-      env:
-        FUGUE_GOOGLE_TEST_CRED: ${{secrets.FUGUE_GOOGLE_TEST_CRED}}
-    - name: "Upload coverage to Codecov"
-      uses: codecov/codecov-action@v3
-      with:
-        fail_ci_if_error: false

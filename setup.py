@@ -39,6 +39,10 @@ setup(
             "db-dtypes",
             "ibis-framework[bigquery]",
         ],
+        "trino": [
+            "fugue[ibis]>=0.8.1",
+            "ibis-framework[trino]",
+        ],
         "ray": ["fugue[ray]>=0.8.1"],
     },
     classifiers=[

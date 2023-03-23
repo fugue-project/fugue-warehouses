@@ -1,58 +1,61 @@
 from typing import Any, Iterable, List, Optional, Union
 
 import ibis
+import pandas as pd
 import pyarrow as pa
 from fugue import (
+    AnyDataFrame,
     ArrowDataFrame,
     DataFrame,
     ExecutionEngine,
     NativeExecutionEngine,
     PartitionSpec,
+    SQLEngine,
 )
 from fugue.dataframe.utils import get_join_schemas
-from fugue_ibis import IbisDataFrame, IbisExecutionEngine, IbisTable
-from fugue_ibis._utils import to_ibis_schema
+from fugue_ibis import IbisDataFrame, IbisExecutionEngine, IbisSQLEngine, IbisTable
 from fugue_ibis.execution_engine import _JOIN_RIGHT_SUFFIX
 from triad import assert_or_throw
-from triad.utils.schema import quote_name
 
 from .client import TrinoClient
 from .dataframe import TrinoDataFrame
+from ._utils import is_trino_repr, is_trino_ibis_table
 
 
-class TrinoExecutionEngine(IbisExecutionEngine):
-    def __init__(self, client: Optional[TrinoClient] = None, conf: Any = None):
-        super().__init__(conf)
+class TrinoSQLEngine(IbisSQLEngine):
+    def __init__(
+        self,
+        execution_engine: "ExecutionEngine",
+        client: Optional[TrinoClient] = None,
+    ) -> None:
+        super().__init__(execution_engine)
         self._client = (
             TrinoClient.get_or_create(self.conf) if client is None else client
         )
 
-    def create_non_ibis_execution_engine(self) -> ExecutionEngine:
-        return NativeExecutionEngine(self.conf)
-
     @property
     def is_distributed(self) -> bool:
-        return False
+        return True
+
+    @property
+    def dialect(self) -> Optional[str]:
+        return "trino"
 
     @property
     def client(self) -> TrinoClient:
         return self._client
 
     @property
-    def dialect(self) -> str:
-        return "trino"
-
-    @property
     def backend(self) -> ibis.BaseBackend:
-        return self._client.ibis
+        return self.client.ibis
 
     def encode_column_name(self, name: str) -> str:
-        return quote_name(name, quote="'")
+        return '"' + name.replace('"', '\\"') + '"'
 
     def get_temp_table_name(self) -> str:
-        return self.client.table_to_full_name(super().get_temp_table_name())
+        return str(self.client.to_table_name(super().get_temp_table_name()))
 
-    def _to_ibis_dataframe(self, df: Any, schema: Any = None) -> IbisDataFrame:
+    def to_df(self, df: Any, schema: Any = None) -> IbisDataFrame:
         if isinstance(df, TrinoDataFrame):
             assert_or_throw(
                 schema is None,
@@ -61,34 +64,49 @@ class TrinoExecutionEngine(IbisExecutionEngine):
             return df
         if isinstance(df, DataFrame):
             res = self._register_df(
-                df.as_arrow(), schema=schema if schema is not None else df.schema
+                df, schema=schema if schema is not None else df.schema
             )
             if df.has_metadata:
                 res.reset_metadata(df.metadata)
             return res
-        if isinstance(df, pa.Table):
+        if isinstance(df, (pa.Table, pd.DataFrame)):
             return self._register_df(df, schema=schema)
-        if isinstance(df, IbisTable):
+        if is_trino_ibis_table(df):
             return TrinoDataFrame(df, schema=schema)
+        if is_trino_repr(df):
+            return TrinoDataFrame(self._client.query_to_ibis(df[1]))
         if isinstance(df, Iterable):
             adf = ArrowDataFrame(df, schema)
-            return self._register_df(adf.native, schema=schema)
+            xdf = self._register_df(adf, schema=schema)
+            return xdf
         raise NotImplementedError
 
-    def _to_non_ibis_dataframe(self, df: Any, schema: Any = None) -> DataFrame:
-        return self.non_ibis_engine.to_df(df, schema)
+    def table_exists(self, table: str) -> bool:
+        tb = self.client.to_table_name(table)
+        tables = self.backend.list_tables(database=tb.schema)
+        return tb.table in tables
 
-    def __repr__(self) -> str:
-        return "TrinoExecutionEngine"
+    def save_table(
+        self,
+        df: DataFrame,
+        table: str,
+        mode: str = "overwrite",
+        partition_spec: Optional[PartitionSpec] = None,
+        **kwargs: Any,
+    ) -> None:
+        self.client.df_to_table(df, table, overwrite=mode == "overwrite")
 
-    def _join(
+    def load_table(self, table: str, **kwargs: Any) -> DataFrame:
+        return TrinoDataFrame(self.client.query_to_ibis(table))
+
+    def join(
         self, df1: DataFrame, df2: DataFrame, how: str, on: Optional[List[str]] = None
     ) -> DataFrame:
         _on = on or []
         if how.lower() not in ["semi", "left_semi", "anti", "left_anti"]:
             return super().join(df1, df2, how, _on)
-        _df1 = self._to_ibis_dataframe(df1)
-        _df2 = self._to_ibis_dataframe(df2)
+        _df1 = self.to_df(df1)
+        _df2 = self.to_df(df2)
         key_schema, end_schema = get_join_schemas(_df1, _df2, how=how, on=on)
         _filter = _df2.native[key_schema.names]
         on_fields = [_df1.native[k] == _filter[k] for k in key_schema]
@@ -101,7 +119,7 @@ class TrinoExecutionEngine(IbisExecutionEngine):
                 _filter, on_fields, suffixes=("", _JOIN_RIGHT_SUFFIX)
             )
             tb = tb[tb[key_schema.names[0] + _JOIN_RIGHT_SUFFIX].isnull()]
-        return self._to_ibis_dataframe(tb[end_schema.names], schema=end_schema)
+        return self.to_df(tb[end_schema.names], schema=end_schema)
 
     def persist(
         self,
@@ -109,18 +127,9 @@ class TrinoExecutionEngine(IbisExecutionEngine):
         lazy: bool = False,
         **kwargs: Any,
     ) -> DataFrame:
-        if self.is_non_ibis(df):
-            return self.non_ibis_engine.persist(df, lazy=lazy, **kwargs)
-
         if isinstance(df, TrinoDataFrame):
-            sql = df.native.compile()
-            tbn = self.client.query_to_table(sql)  # type: ignore
-            parts = tbn.split(".")
-            tb = self.backend.table(parts[2], database=parts[0] + "." + parts[1])
-            res = TrinoDataFrame(tb)
-            if df.has_metadata:
-                res.reset_metadata(df.metadata)
-            return res
+            tbn = self.client.df_to_table(df)
+            return TrinoDataFrame(self.client.query_to_ibis(tbn))
         return self.to_df(df)
 
     def sample(
@@ -131,11 +140,6 @@ class TrinoExecutionEngine(IbisExecutionEngine):
         replace: bool = False,
         seed: Optional[int] = None,
     ) -> DataFrame:
-        if self.is_non_ibis(df):
-            return self.non_ibis_engine.sample(
-                df, n=n, frac=frac, replace=replace, seed=seed
-            )
-
         assert_or_throw(
             (n is None and frac is not None and frac >= 0.0)
             or (frac is None and n is not None and n >= 0),
@@ -143,15 +147,45 @@ class TrinoExecutionEngine(IbisExecutionEngine):
                 f"one and only one of n and frac should be non-negative, {n}, {frac}"
             ),
         )
-        idf = self._to_ibis_dataframe(df)
+        idf = self.to_df(df)
         if frac is not None:
-            sql = f"SELECT * FROM _temp WHERE rand()<{frac}"
-            return self._to_ibis_dataframe(
-                self._raw_select(sql, {"_temp": idf}),
+            sql = f"SELECT * FROM _temp TABLESAMPLE BERNOULLI ({frac*100})"
+            return self.to_df(
+                self.query_to_table(sql, {"_temp": idf}),
                 schema=df.schema,
             )
         else:
-            return self._to_ibis_dataframe(idf.native.limit(n), schema=df.schema)
+            return self.to_df(idf.native.limit(n), schema=df.schema)
+
+    def _register_df(
+        self, df: AnyDataFrame, name: Optional[str] = None, schema: Any = None
+    ) -> TrinoDataFrame:
+        tbn = self.client.df_to_table(df, table=name)
+        return TrinoDataFrame(self.client.query_to_ibis(tbn), schema=schema)
+
+
+class TrinoExecutionEngine(IbisExecutionEngine):
+    def __init__(self, client: Optional[TrinoClient] = None, conf: Any = None):
+        super().__init__(conf)
+        self._client = (
+            TrinoClient.get_or_create(self.conf) if client is None else client
+        )
+
+    def create_non_ibis_execution_engine(self) -> ExecutionEngine:
+        return NativeExecutionEngine(self.conf)
+
+    def create_default_sql_engine(self) -> SQLEngine:
+        return TrinoSQLEngine(self, self._client)
+
+    def is_non_ibis(self, ds: Any) -> bool:
+        return not isinstance(ds, (IbisDataFrame, IbisTable)) and not is_trino_repr(ds)
+
+    @property
+    def is_distributed(self) -> bool:
+        return True
+
+    def __repr__(self) -> str:
+        return "TrinoExecutionEngine"
 
     def load_df(
         self,
@@ -175,37 +209,3 @@ class TrinoExecutionEngine(IbisExecutionEngine):
         return self.non_ibis_engine.save_df(
             df, path, format_hint, mode, partition_spec, force_single, **kwargs
         )
-
-    def table_exists(self, table: str) -> bool:
-        tb = self.client.table_to_full_name(table).split(".")
-        tables = self.backend.list_tables(database=tb[1])
-        return tb[-1] in tables
-
-    def save_table(
-        self,
-        df: DataFrame,
-        table: str,
-        mode: str = "overwrite",
-        partition_spec: Optional[PartitionSpec] = None,
-        **kwargs: Any,
-    ) -> None:
-        tb = self.client.table_to_full_name(table).split(".")
-        sb = self.client.connect_to_schema(tb[1])
-        if mode == "overwrite":
-            sb.drop_table(tb[-1], force=True)
-        if isinstance(df, IbisDataFrame):
-            sb.create_table(tb[-1], df.native)
-        else:
-            sb.create_table(tb[-1], df.as_pandas(), schema=to_ibis_schema(df.schema))
-
-    def load_table(self, table: str, **kwargs: Any) -> DataFrame:
-        tb = self.client.table_to_full_name(table).split(".")
-        return TrinoDataFrame(self.backend.table(tb[-1], schema=tb[1]))
-
-    def _register_df(
-        self, df: pa.Table, name: Optional[str] = None, schema: Any = None
-    ) -> TrinoDataFrame:
-        tbn = self.client.df_to_table(df)
-        parts = tbn.split(".")
-        tb = self.backend.table(parts[-1], schema=parts[-2])
-        return TrinoDataFrame(tb, schema=schema)

@@ -1,14 +1,15 @@
+import re
 from typing import Any, List, Optional
 
 import fugue.api as fa
 import pyarrow as pa
-from fugue_ibis import IbisTable, IbisSchema
+from fugue.extensions import namespace_candidate
+from fugue_ibis import IbisSchema, IbisTable
 from fugue_ibis._utils import ibis_to_pa_type
 from ibis.backends.trino import Backend
 from triad import ParamDict, Schema
 from triad.utils.pyarrow import TRIAD_DEFAULT_TIMESTAMP
-from triad.utils.schema import quote_name
-from typing import Iterable
+
 from ._constants import (
     FUGUE_TRINO_CONF_TEMP_SCHEMA,
     FUGUE_TRINO_CONF_TEMP_SCHEMA_DEFAULT_NAME,
@@ -21,6 +22,9 @@ def get_temp_schema(conf: Optional[ParamDict] = None) -> str:
     return fa.get_current_conf().get(
         FUGUE_TRINO_CONF_TEMP_SCHEMA, FUGUE_TRINO_CONF_TEMP_SCHEMA_DEFAULT_NAME
     )
+
+
+is_trino_repr = namespace_candidate("trino", lambda x: isinstance(x, str))
 
 
 def is_trino_ibis_table(df: Any):
@@ -42,25 +46,11 @@ def to_schema(schema: IbisSchema) -> Schema:
     return Schema(fields)
 
 
-def table_to_query(
-    table: str,
-    columns: Optional[List[str]] = None,
-    row_filter: Optional[str] = None,
-    sample: float = 1.0,
-) -> str:
-    def _build_sql() -> Iterable[str]:
-        yield "SELECT"
-        if columns is None or len(columns) == 0:
-            yield "*"
-        else:
-            yield ",".join(quote_name(c) for c in columns)
-        yield "FROM " + quote_name(table)
-        if sample < 1.0:
-            yield f"TABLESAMPLE SYSTEM ({sample*100} PERCENT)"
-        if row_filter is not None and row_filter.strip() != "":
-            yield "WHERE " + row_filter
-
-    return " ".join(_build_sql())
+def is_select_query(s: str) -> bool:
+    return (
+        re.match(r"^\s*select\s", s, re.IGNORECASE) is not None
+        or re.match(r"^\s*with\s", s, re.IGNORECASE) is not None
+    )
 
 
 def _is_default_timestamp(tp: pa.DataType) -> bool:

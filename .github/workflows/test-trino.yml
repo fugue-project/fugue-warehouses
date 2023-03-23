@@ -1,0 +1,41 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Test Trino
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+    - fugue_trino/**
+  pull_request:
+    branches: [ master ]
+    paths:
+    - fugue_trino/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-trino
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      trino:
+        image: trinodb/trino
+        ports:
+           - 8181:8080
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.8
+    - name: Install dependencies
+      run: |
+        make dev
+        pip install .[trino]
+    - name: Test
+      run: make testtrino

@@ -32,14 +32,18 @@ setup(
     install_requires=[],
     extras_require={
         "bigquery": [
-            "fugue[ibis]==0.8.1",
+            "fugue[ibis]>=0.8.1",
             "fs-gcsfs",
             "pandas-gbq",
             "google-auth",
             "db-dtypes",
             "ibis-framework[bigquery]",
         ],
-        "ray": ["fugue[ray]==0.8.1"],
+        "trino": [
+            "fugue[ibis]>=0.8.1",
+            "ibis-framework[trino]",
+        ],
+        "ray": ["fugue[ray]>=0.8.1"],
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"
@@ -57,6 +61,7 @@ setup(
         "fugue.plugins": [
             "bigquery = fugue_bigquery.registry",
             "bigquery_ray = fugue_bigquery.ray_execution_engine[ray]",
+            "trino = fugue_trino.registry",
         ],
         "ibis.backends": ["fugue_trino = fugue_trino.ibis_trino"],
     },

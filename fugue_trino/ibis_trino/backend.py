@@ -22,7 +22,12 @@ class Backend(BaseBackend):
                     "varchar("
                 ):
                     ibis_type = dt.string
+                elif _type.lower().startswith("timestamp") and _type.lower().endswith(
+                    " with time zone"
+                ):
+                    # ibis_type = partial(dt.timestamp, timezone="UTC")
+                    ibis_type = dt.timestamp
                 else:
-                    ibis_type = parse(type)
+                    ibis_type = parse(_type)
                 yield name, ibis_type(nullable=True)
             con.exec_driver_sql(f"DEALLOCATE PREPARE {tmpname}")

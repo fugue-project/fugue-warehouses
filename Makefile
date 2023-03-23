@@ -34,7 +34,13 @@ test:
 	python3 -bb -m pytest tests/
 
 testbq:
-	python3 -bb -m pytest tests/fugue_bigquery
+	python3 -bb -m pytest tests/fugue_bigquery --cov=fugue_bigquery
+
+trinodocker:
+	docker run --name trino -d -p 8181:8080 trinodb/trino
+
+testtrino:
+	python3 -bb -m pytest tests/fugue_trino --cov=fugue_trino
 
 lab:
 	mkdir -p tmp

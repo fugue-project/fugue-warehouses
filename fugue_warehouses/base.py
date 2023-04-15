@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, List
+from fugue import AnyDataFrame
 
 class WarehouseClientBase(ABC):
     def __init__(self):

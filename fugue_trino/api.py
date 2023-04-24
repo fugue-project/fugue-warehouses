@@ -6,6 +6,26 @@ from fugue import AnyDataFrame, AnyExecutionEngine
 from .client import TrinoClient
 from .dataframe import TrinoDataFrame
 from .execution_engine import TrinoExecutionEngine
+from fugue_ibis import IbisTable, IbisDataFrame
+import sqlglot
+
+
+def describe(df: Any) -> None:
+    """Print the compiled SQL plus the output schema
+
+    :param df: the input dataframe or ibis table
+    :return: the SQL query and the output schema
+    """
+    if isinstance(df, IbisDataFrame):
+        query = df.to_sql()
+    elif isinstance(df, IbisTable):
+        query = str(df.compile())
+    else:
+        fa.show(df)
+        return
+    query = sqlglot.transpile(query, read="trino", write="trino", pretty=True)[0]
+    schema = str(fa.get_schema(df))
+    print(f"{query}\n\nOutput Schema: {schema}")
 
 
 def load(

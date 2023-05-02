@@ -14,7 +14,7 @@ from ._utils import MockTrinoExecutionEngine, get_testing_client
 
 
 @pytest.mark.skipif(sys.version_info < (3, 8), reason="< 3.8")
-class BigQueryDataFrameTests(DataFrameTests.Tests):
+class TrinoDataFrameTests(DataFrameTests.Tests):
     @classmethod
     def setUpClass(cls):
         cls._client = get_testing_client()

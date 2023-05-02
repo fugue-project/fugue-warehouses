@@ -108,6 +108,7 @@ class TrinoClient:
             self._trino_con = connect(host=host, port=port, user=user)
         self._con_lock = SerializableRLock()
         self._schema_backends: Dict[str, BaseBackend] = {}
+        self.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{self._temp_schema}")
         self.sql(f"USE {catalog}.{self._temp_schema}")
 
     @property

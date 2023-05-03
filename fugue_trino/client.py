@@ -158,7 +158,7 @@ class TrinoClient:
                 warnings.simplefilter("ignore", category=sa_exc.SAWarning)
                 if isinstance(fdf, IbisDataFrame) and is_trino_ibis_table(fdf.native):
                     obj: Any = fdf.native
-                    query = f"CREATE TABLE {tb} AS " + fdf.to_sql()
+                    query = f"CREATE OR REPLACE VIEW {tb} AS " + fdf.to_sql()
                     self.sql(query)
                 else:
                     obj = fdf.as_pandas().replace({np.nan: None})

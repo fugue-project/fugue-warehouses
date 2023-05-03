@@ -32,7 +32,7 @@ setup(
     install_requires=[],
     extras_require={
         "bigquery": [
-            "fugue[ibis]>=0.8.3",
+            "fugue[ibis]==0.8.4.dev1",
             "fs-gcsfs",
             "pandas-gbq",
             "google-auth",
@@ -40,10 +40,10 @@ setup(
             "ibis-framework[bigquery]",
         ],
         "trino": [
-            "fugue[ibis]>=0.8.3",
+            "fugue[ibis]==0.8.4.dev1",
             "ibis-framework[trino]",
         ],
-        "ray": ["fugue[ray]>=0.8.3"],
+        "ray": ["fugue[ray]==0.8.4.dev1"],
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"

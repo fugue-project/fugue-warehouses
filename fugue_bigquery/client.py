@@ -20,7 +20,6 @@ from fugue import (
     PartitionSpec,
 )
 from fugue_ibis import IbisTable
-from fugue_warehouses import WarehouseClientBase
 from google.api_core import client_info as rest_client_info
 from google.api_core.gapic_v1 import client_info as grpc_client_info
 from google.cloud import bigquery, bigquery_storage
@@ -42,7 +41,7 @@ _FUGUE_BIGQUERY_CLIENT_CONTEXT = ContextVar(
 _CONTEXT_LOCK = SerializableRLock()
 
 
-class BigQueryClient(WarehouseClientBase):
+class BigQueryClient:
     @staticmethod
     def get_or_create(conf: Any = None) -> "BigQueryClient":
         with _CONTEXT_LOCK:

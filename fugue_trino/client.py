@@ -10,7 +10,6 @@ import numpy as np
 from fugue import AnyDataFrame
 from fugue_ibis import IbisDataFrame, IbisTable
 from fugue_ibis._utils import to_ibis_schema
-from fugue_warehouses import WarehouseClientBase
 from ibis import BaseBackend
 from sqlalchemy import exc as sa_exc
 from triad import ParamDict, SerializableRLock, assert_or_throw
@@ -36,7 +35,7 @@ _FUGUE_TRINO_CLIENT_CONTEXT = ContextVar("_FUGUE_TRINO_CLIENT_CONTEXT", default=
 _CONTEXT_LOCK = SerializableRLock()
 
 
-class TrinoClient(WarehouseClientBase):
+class TrinoClient:
     @staticmethod
     def get_or_create(conf: Any = None) -> "TrinoClient":
         with _CONTEXT_LOCK:

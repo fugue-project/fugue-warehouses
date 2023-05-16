@@ -62,6 +62,7 @@ setup(
             "bigquery = fugue_bigquery.registry",
             "bigquery_ray = fugue_bigquery.ray_execution_engine[ray]",
             "trino = fugue_trino.registry",
+            "snowflake = fugue_snowflake.registry",
         ],
         "ibis.backends": ["fugue_trino = fugue_trino.ibis_trino"],
     },

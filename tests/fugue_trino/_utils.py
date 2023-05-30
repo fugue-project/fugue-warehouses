@@ -1,7 +1,6 @@
 from typing import Any, Optional
 
 from fugue import DataFrame
-from triad import to_uuid
 
 from fugue_trino import TrinoClient, TrinoExecutionEngine
 from fugue_trino._constants import FUGUE_TRINO_CONF_TEMP_SCHEMA_DEFAULT_NAME
@@ -29,12 +28,4 @@ class MockTrinoExecutionEngine(TrinoExecutionEngine):
         self._cache = {}
 
     def to_df(self, df: Any, schema: Any = None) -> DataFrame:
-        if isinstance(df, list):
-            key = to_uuid(df, schema)
-        else:
-            key = to_uuid(id(df), schema)
-        if key in self._cache:
-            return self._cache[key]
-        res = super().sql_engine.to_df(df, schema)
-        self._cache[key] = res
-        return res
+        return super().sql_engine.to_df(df, schema)

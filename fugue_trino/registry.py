@@ -1,10 +1,11 @@
 from typing import Any, Optional, Tuple
 
 import fugue.plugins as fp
+import fugue.api as fa
 from fugue import DataFrame, ExecutionEngine, SQLEngine, is_pandas_or
-from triad import ParamDict
-
-from ._utils import is_trino_ibis_table, is_trino_repr
+from triad import ParamDict, Schema
+from fugue_ibis import IbisTable
+from ._utils import is_trino_ibis_table, is_trino_repr, to_schema
 from .client import TrinoClient
 from .dataframe import TrinoDataFrame
 from .execution_engine import TrinoExecutionEngine, TrinoSQLEngine
@@ -15,12 +16,22 @@ def _trino_to_df(query: Tuple[str, str], **kwargs: Any) -> DataFrame:
     return TrinoDataFrame(TrinoClient.get_current().query_to_ibis(query[1]))
 
 
-@fp.parse_creator.candidate(is_trino_repr)
-def _parse_trino_creator(query: Tuple[str, str]):
-    def _creator() -> DataFrame:
-        return _trino_to_df(query)
+@fp.is_df.candidate(lambda df: is_trino_ibis_table(df) or is_trino_repr(df))
+def _is_trino_df(df: Any):
+    return True
 
-    return _creator
+
+@fp.get_schema.candidate(lambda df: is_trino_ibis_table(df) or is_trino_repr(df))
+def _trino_get_schema(df: Any) -> Schema:
+    """Get the schema of certain query or table
+
+    :param query_or_table: the table name or query string
+    :return: the schema of the output
+    """
+    if isinstance(df, IbisTable):
+        return to_schema(df.schema())
+    client = TrinoClient.get_or_create(fa.get_current_conf())
+    return to_schema(client.query_to_ibis(df[1]).schema())
 
 
 @fp.parse_execution_engine.candidate(
@@ -32,6 +43,13 @@ def _parse_trino(engine: str, conf: Any, **kwargs) -> ExecutionEngine:
     _conf = ParamDict(conf)
     client = TrinoClient.get_or_create(_conf)
     return TrinoExecutionEngine(client, _conf)
+
+
+@fp.parse_execution_engine.candidate(
+    lambda engine, conf, **kwargs: isinstance(engine, TrinoClient)
+)
+def _parse_trino_client(engine: TrinoClient, conf: Any, **kwargs) -> ExecutionEngine:
+    return TrinoExecutionEngine(engine, conf)
 
 
 @fp.infer_execution_engine.candidate(

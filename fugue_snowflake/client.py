@@ -163,11 +163,18 @@ class SnowflakeClient:
 
     def create_temp_table(self, schema: Schema) -> str:
         temp_table_name = f"_temp_{uuid4().hex}"
-        columns = ", ".join([f"{col.name} {col.dtype}" for col in schema])
-        create_table_query = f"CREATE TEMPORARY TABLE {temp_table_name} ({columns})"
-        self._sf.cursor().execute(create_table_query)
+        df = ArrayDataFrame(schema=schema)
+        df_pandas = df.as_pandas()
+
+        snowflake.connector.pandas_tools.write_pandas(
+            self.sf, 
+            df_pandas, 
+            temp_table_name, 
+            overwrite=True, 
+            table_type="temporary"
+        )
+
         self._temp_tables.append(temp_table_name)
-        return temp_table_name
 
     def register_temp_table(self, name: str):
         self._temp_tables.append(name)
@@ -176,21 +183,16 @@ class SnowflakeClient:
         return name in self._temp_tables
 
     def df_to_table(
-        self, df: AnyDataFrame, table: Any = None, overwrite: bool = False
+        self, df: AnyDataFrame, table_name: str = None, overwrite: bool = False
     ) -> Any:
-        if table is None:
-            schema = df.schema  # THIS IS BAD CODE!!!!! TODO
-            table = self.create_temp_table(schema)
+        if table_name is None:
+            if isinstance(df, ArrayDataFrame):
+                schema = pyarrow.Table.from_pandas(df.as_pandas()).schema 
+            else:
+                schema = ArrowDataFrame(df).schema
+            table_name = self.create_temp_table(schema)
 
-        df = ArrowDataFrame(df)
-        df_pandas = df.native.to_pandas()
-        mode = "overwrite" if overwrite else "append"
-        df_pandas.to_sql(
-            table,
-            self._sf,
-            if_exists=mode,
-            index=False,
-            method=snowflake.connector.pandas_tools.write_pandas,
-        )
+        self.load_df(df, table_name, mode="overwrite" if overwrite else "append")
 
-        return table
+        return table_name
+

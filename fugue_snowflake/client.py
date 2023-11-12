@@ -133,24 +133,18 @@ class SnowflakeClient:
     def load_df(
         self,
         df: DataFrame,
-        path: str,
-        format_hint: Any = None,
-        mode: str = "overwrite",
-        **kwargs: Any,
+        name: str,
+        mode: str = "overwrite"
     ) -> None:
-        df = ArrowDataFrame(df)
-        df_pandas = df.native.to_pandas()
+        if isinstance(df, ArrayDataFrame):
+            df_pandas = df.as_pandas()
+        else:
+            df_pandas = ArrowDataFrame(df).as_pandas()
+
         if mode == "overwrite":
-            self._sf.cursor().execute(f"DROP TABLE IF EXISTS {path}")
-        if mode in ["overwrite", "append"]:
-            df_pandas.to_sql(
-                path,
-                self._sf,
-                if_exists=mode,
-                index=False,
-                method=snowflake.connector.pandas_tools.write_pandas,
-                **kwargs,
-            )
+            snowflake.connector.pandas_tools.write_pandas(self.sf, df_pandas, name, overwrite=True)
+        elif mode == "append":
+            snowflake.connector.pandas_tools.write_pandas(self.sf, df_pandas, name)
         else:
             raise ValueError(f"Unsupported mode: {mode}")
 

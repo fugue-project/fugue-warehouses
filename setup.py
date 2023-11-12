@@ -44,6 +44,10 @@ setup(
             "ibis-framework[trino]",
         ],
         "ray": ["fugue[ray]>=0.8.1"],
+        "snowflake": [
+            "fugue[ibis]>=0.8.1",
+            "ibis-framework[snowflake]"
+        ]
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"

@@ -39,6 +39,7 @@ class SnowflakeClient:
         password: Optional[str] = None,
         database: Optional[str] = None,
         schema: Optional[str] = None,
+        role: Optional[str] = 'ACCOUNTADMIN',
         credentials_func: Optional[Callable[[], Dict[str, Any]]] = None,
     ):
         self._temp_tables: List[str] = []
@@ -47,6 +48,7 @@ class SnowflakeClient:
         self._password = password
         self._database = database
         self._schema = schema
+        self._role = role
 
         self._sf = snowflake.connector.connect(
             account=account,
@@ -54,6 +56,7 @@ class SnowflakeClient:
             password=password,
             database=database,
             schema=schema,
+            role=role,
         )
 
         self._ibis = ibis.snowflake.connect(
@@ -61,6 +64,7 @@ class SnowflakeClient:
             user=user,
             password=password,
             database=f"{database}/{schema}",
+            role=role,
         )
 
     @staticmethod

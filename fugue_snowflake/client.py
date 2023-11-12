@@ -5,7 +5,9 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import ibis
+import pyarrow
 import snowflake.connector
+from snowflake.connector.constants import FIELD_TYPES
 from fugue import (
     ArrayDataFrame,
     ArrowDataFrame,
@@ -124,7 +126,8 @@ class SnowflakeClient:
         rows = cursor.fetchall()
         if columns is None:
             cols = cursor.description
-            columns = Schema([f"{x[0]}:{x[1]}" for x in cols])
+            pa_schema = pyarrow.schema([(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols])
+            columns = Schema(pa_schema)
         return ArrayDataFrame(rows, columns)
 
     def load_df(

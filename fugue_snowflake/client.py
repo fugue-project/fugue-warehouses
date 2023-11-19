@@ -39,7 +39,7 @@ class SnowflakeClient:
         password: Optional[str] = None,
         database: Optional[str] = None,
         schema: Optional[str] = None,
-        role: Optional[str] = 'ACCOUNTADMIN',
+        role: Optional[str] = "ACCOUNTADMIN",
         credentials_func: Optional[Callable[[], Dict[str, Any]]] = None,
     ):
         self._temp_tables: List[str] = []
@@ -130,23 +130,22 @@ class SnowflakeClient:
         rows = cursor.fetchall()
         if columns is None:
             cols = cursor.description
-            pa_schema = pyarrow.schema([(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols])
+            pa_schema = pyarrow.schema(
+                [(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols]
+            )
             columns = Schema(pa_schema)
         return ArrayDataFrame(rows, columns)
 
-    def load_df(
-        self,
-        df: DataFrame,
-        name: str,
-        mode: str = "overwrite"
-    ) -> None:
+    def load_df(self, df: DataFrame, name: str, mode: str = "overwrite") -> None:
         if isinstance(df, ArrayDataFrame):
             df_pandas = df.as_pandas()
         else:
             df_pandas = ArrowDataFrame(df).as_pandas()
 
         if mode == "overwrite":
-            snowflake.connector.pandas_tools.write_pandas(self.sf, df_pandas, name, overwrite=True)
+            snowflake.connector.pandas_tools.write_pandas(
+                self.sf, df_pandas, name, overwrite=True
+            )
         elif mode == "append":
             snowflake.connector.pandas_tools.write_pandas(self.sf, df_pandas, name)
         else:
@@ -171,11 +170,7 @@ class SnowflakeClient:
         df_pandas = df.as_pandas()
 
         snowflake.connector.pandas_tools.write_pandas(
-            self.sf, 
-            df_pandas, 
-            temp_table_name, 
-            overwrite=True, 
-            table_type="temporary"
+            self.sf, df_pandas, temp_table_name, overwrite=True, table_type="temporary"
         )
 
         self._temp_tables.append(temp_table_name)
@@ -191,7 +186,7 @@ class SnowflakeClient:
     ) -> Any:
         if table_name is None:
             if isinstance(df, ArrayDataFrame):
-                schema = pyarrow.Table.from_pandas(df.as_pandas()).schema 
+                schema = pyarrow.Table.from_pandas(df.as_pandas()).schema
             else:
                 schema = ArrowDataFrame(df).schema
             table_name = self.create_temp_table(schema)
@@ -199,4 +194,3 @@ class SnowflakeClient:
         self.load_df(df, table_name, mode="overwrite" if overwrite else "append")
 
         return table_name
-

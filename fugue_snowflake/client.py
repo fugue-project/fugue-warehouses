@@ -13,7 +13,6 @@ from fugue import (
     ArrowDataFrame,
     DataFrame,
     LocalDataFrame,
-    PartitionSpec,
     AnyDataFrame,
 )
 from fugue_ibis import IbisTable

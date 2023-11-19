@@ -53,7 +53,7 @@ class TrinoSQLEngine(IbisSQLEngine):
         return '"' + name.replace('"', '\\"') + '"'
 
     def get_temp_table_name(self) -> str:
-        return str(self.client.to_table_name(super().get_temp_table_name()))
+        return str(self.client.to_table_name(None))
 
     def to_df(self, df: Any, schema: Any = None) -> IbisDataFrame:
         if isinstance(df, TrinoDataFrame):

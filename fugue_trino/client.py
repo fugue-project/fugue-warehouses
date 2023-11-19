@@ -9,7 +9,6 @@ import ibis
 import numpy as np
 from fugue import AnyDataFrame
 from fugue_ibis import IbisDataFrame, IbisTable
-from fugue_ibis._utils import to_ibis_schema
 from ibis import BaseBackend
 from sqlalchemy import exc as sa_exc
 from triad import ParamDict, SerializableRLock, assert_or_throw
@@ -27,7 +26,12 @@ from ._constants import (
     FUGUE_TRINO_CONF_USER,
     FUGUE_TRINO_ENV_PASSWORD,
 )
-from ._utils import get_temp_schema, is_trino_ibis_table, is_select_query
+from ._utils import (
+    get_temp_schema,
+    is_select_query,
+    is_trino_ibis_table,
+    to_ibis_schema,
+)
 from .collections import TableName
 
 _FUGUE_TRINO_CLIENT_CONTEXT = ContextVar("_FUGUE_TRINO_CLIENT_CONTEXT", default=None)
@@ -104,6 +108,8 @@ class TrinoClient:
             self._trino_con = connect(host=host, port=port, user=user)
         self._con_lock = SerializableRLock()
         self._schema_backends: Dict[str, BaseBackend] = {}
+        self.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{self._temp_schema}")
+        self.sql(f"USE {catalog}.{self._temp_schema}")
 
     @property
     def catalog(self) -> str:
@@ -152,18 +158,20 @@ class TrinoClient:
                 warnings.simplefilter("ignore", category=sa_exc.SAWarning)
                 if isinstance(fdf, IbisDataFrame) and is_trino_ibis_table(fdf.native):
                     obj: Any = fdf.native
+                    query = f"CREATE OR REPLACE VIEW {tb} AS " + fdf.to_sql()
+                    self.sql(query)
                 else:
                     obj = fdf.as_pandas().replace({np.nan: None})
                     if len(obj) == 0:
                         obj = None
                     else:
                         obj = ibis.memtable(obj, schema=to_ibis_schema(fdf.schema))
-                con.create_table(
-                    tb.table,
-                    obj,
-                    schema=to_ibis_schema(fdf.schema),
-                    overwrite=overwrite,
-                )
+                    con.create_table(
+                        tb.table,
+                        obj,
+                        schema=to_ibis_schema(fdf.schema),
+                        overwrite=overwrite,
+                    )
         except HttpError:  # pragma: no cover
             pass
         return tb

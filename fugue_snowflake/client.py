@@ -154,13 +154,11 @@ class SnowflakeClient:
     def save_df(
         self,
         path: str,
-        format_hint: Any = None,
-        partition_spec: PartitionSpec = None,
         mode: str = "overwrite",
         **kwargs: Any,
     ) -> Callable[[DataFrame], None]:
         def _save(df: DataFrame) -> None:
-            self.load_df(df, path, format_hint=format_hint, mode=mode, **kwargs)
+            self.load_df(df, path, mode=mode, **kwargs)
 
         return _save
 
@@ -174,6 +172,8 @@ class SnowflakeClient:
         )
 
         self._temp_tables.append(temp_table_name)
+
+        return temp_table_name
 
     def register_temp_table(self, name: str):
         self._temp_tables.append(name)

@@ -44,6 +44,7 @@ setup(
             "ibis-framework[trino]",
         ],
         "ray": ["fugue[ray]>=0.8.4"],
+        "snowflake": ["fugue[ibis]>=0.8.4", "ibis-framework[snowflake]"],
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"
@@ -62,6 +63,7 @@ setup(
             "bigquery = fugue_bigquery.registry",
             "bigquery_ray = fugue_bigquery.ray_execution_engine[ray]",
             "trino = fugue_trino.registry",
+            "snowflake = fugue_snowflake.registry",
         ],
         "ibis.backends": ["fugue_trino = fugue_trino.ibis_trino"],
     },

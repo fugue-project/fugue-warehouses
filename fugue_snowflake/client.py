@@ -20,7 +20,6 @@ from triad import ParamDict, Schema, SerializableRLock, assert_or_throw
 
 from ._constants import (
     FUGUE_SNOWFLAKE_CONF_CREDENTIALS_ENV,
-    FUGUE_SNOWFLAKE_CONF_ACCOUNT,
 )
 
 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT = ContextVar(
@@ -38,32 +37,53 @@ class SnowflakeClient:
         password: Optional[str] = None,
         database: Optional[str] = None,
         schema: Optional[str] = None,
-        role: Optional[str] = "ACCOUNTADMIN",
+        role: Optional[str] = None,
         credentials_func: Optional[Callable[[], Dict[str, Any]]] = None,
     ):
-        self._temp_tables: List[str] = []
-        self._account = account
-        self._user = user
-        self._password = password
-        self._database = database
-        self._schema = schema
-        self._role = role
+        """Create a new SnowflakeClient.
 
+        SnowflakeClient wraps a Snowflake connection and an Ibis connection.
+        It also provides methods to convert between DataFrames and Snowflake tables.
+
+        You can either provide the credentials directly with args or provide
+        a dict with the credentials.
+        """
+        self._temp_tables: List[str] = []
+        self._credentials_func = credentials_func
+
+        if account and user and password and database and schema and role:
+            self._account = account
+            self._user = user
+            self._password = password
+            self._database = database
+            self._schema = schema
+            self._role = role
+        elif credentials_func is not None:
+            credentials = self._credentials_func()
+            self._account = credentials["account"]
+            self._user = credentials["user"]
+            self._password = credentials["password"]
+            self._database = credentials["database"]
+            self._schema = credentials["schema"]
+            self._role = credentials["role"]
+        else:
+            raise AttributeError("Missing required credentials to connect to Snowflake.")
+            
         self._sf = snowflake.connector.connect(
-            account=account,
-            user=user,
-            password=password,
-            database=database,
-            schema=schema,
-            role=role,
+            account=self._account,
+            user=self._user,
+            password=self._password,
+            database=self._database,
+            schema=self._schema,
+            role=self._role
         )
 
         self._ibis = ibis.snowflake.connect(
-            account=account,
-            user=user,
-            password=password,
-            database=f"{database}/{schema}",
-            role=role,
+            account=self._account,
+            user=self._user,
+            password=self._password,
+            database=f"{self._database}/{self._schema}",
+            role=self._role,
         )
 
     @staticmethod
@@ -72,15 +92,14 @@ class SnowflakeClient:
             res = _FUGUE_SNOWFLAKE_CLIENT_CONTEXT.get()
             if res is None:
                 _conf = ParamDict(conf)
-                account = _conf.get_or_none(FUGUE_SNOWFLAKE_CONF_ACCOUNT, str)
                 ce = _conf.get_or_none(FUGUE_SNOWFLAKE_CONF_CREDENTIALS_ENV, str)
                 if ce is not None:
-                    info = json.loads(os.environ[ce])
+                    info = json.loads(open(os.environ[ce], "r").read())
                     credentials_func: Any = lambda: info
                 else:
                     credentials_func = None
                 res = SnowflakeClient(
-                    account=account, credentials_func=credentials_func
+                    credentials_func=credentials_func
                 )
                 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT.set(res)  # type: ignore
             return res

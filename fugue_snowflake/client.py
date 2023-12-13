@@ -1,11 +1,13 @@
 import json
 import os
+import tempfile
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import ibis
-import pyarrow
+import pyarrow as pa
+import pyarrow.parquet as pq
 import snowflake.connector
 from snowflake.connector.constants import FIELD_TYPES
 from fugue import (
@@ -148,7 +150,7 @@ class SnowflakeClient:
         rows = cursor.fetchall()
         if columns is None:
             cols = cursor.description
-            pa_schema = pyarrow.schema(
+            pa_schema = pa.schema(
                 [(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols]
             )
             columns = Schema(pa_schema)
@@ -181,7 +183,7 @@ class SnowflakeClient:
         return _save
 
     def create_temp_table(self, schema: Schema) -> str:
-        temp_table_name = f"_temp_{uuid4().hex}"
+        temp_table_name = f"temp_{uuid4().hex}".upper()
         df = ArrayDataFrame(schema=schema)
         df_pandas = df.as_pandas()
 
@@ -204,7 +206,7 @@ class SnowflakeClient:
     ) -> Any:
         if table_name is None:
             if isinstance(df, ArrayDataFrame):
-                schema = pyarrow.Table.from_pandas(df.as_pandas()).schema
+                schema = pa.Table.from_pandas(df.as_pandas()).schema
             else:
                 schema = ArrowDataFrame(df).schema
             table_name = self.create_temp_table(schema)
@@ -212,3 +214,28 @@ class SnowflakeClient:
         self.load_df(df, table_name, mode="overwrite" if overwrite else "append")
 
         return table_name
+    
+    def arrow_to_table(
+        self, ptable: pa.Table, table: Optional[str] = None
+    ) -> str:
+        tb = table or self.create_temp_table(ptable.schema)
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
+            temp_file_name = tf.name
+        try:
+            pq.write_table(ptable, temp_file_name)
+            stage_name = f"{tb}_stage"
+            self.sf.cursor().execute(f"CREATE TEMP STAGE {stage_name}")
+            self.sf.cursor().execute(
+                f"PUT file://{temp_file_name} @{stage_name}"
+            )
+            self.sf.cursor().execute(
+                f"""
+                COPY INTO {tb} 
+                FROM @{stage_name} 
+                FILE_FORMAT = (TYPE = 'PARQUET') 
+                MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+                """
+            )
+        finally:
+            os.remove(temp_file_name)
+        return tb

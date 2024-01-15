@@ -17,6 +17,7 @@ from fugue import (
     LocalDataFrame,
     AnyDataFrame,
 )
+from ibis.formats.pyarrow import PyArrowSchema
 from fugue_ibis import IbisTable
 from triad import ParamDict, Schema, SerializableRLock, assert_or_throw
 
@@ -182,14 +183,19 @@ class SnowflakeClient:
 
         return _save
 
-    def create_temp_table(self, schema: Schema) -> str:
+    def create_temp_table(self, schema: Schema | pa.Schema) -> str:
         temp_table_name = f"temp_{uuid4().hex}".upper()
-        df = ArrayDataFrame(schema=schema)
-        df_pandas = df.as_pandas()
+        if isinstance(schema, pa.Schema):
+            pass
+        elif isinstance(schema, Schema):
+            schema = schema.pa_schema
+        else:
+            raise TypeError(f"Unsupported schema type: {type(schema)}")
+        
+        # CURRENTLY CONVERTING TO IBIS SCHEMA DOESN'T WORK - METHOD REQUIRES `ibis-framework>=7.2.0`
+        ibis_schema = PyArrowSchema.to_ibis(schema)
 
-        snowflake.connector.pandas_tools.write_pandas(
-            self.sf, df_pandas, temp_table_name, overwrite=True, table_type="temporary"
-        )
+        self.ibis.create_table(temp_table_name, schema=ibis_schema, temp=True)
 
         self._temp_tables.append(temp_table_name)
 
@@ -223,19 +229,19 @@ class SnowflakeClient:
             temp_file_name = tf.name
         try:
             pq.write_table(ptable, temp_file_name)
-            stage_name = f"{tb}_stage"
-            self.sf.cursor().execute(f"CREATE TEMP STAGE {stage_name}")
-            self.sf.cursor().execute(
+            stage_name = f"{tb}_STAGE"
+            self.ibis.raw_sql(f"CREATE TEMP STAGE {stage_name}").close()
+            self.ibis.raw_sql(
                 f"PUT file://{temp_file_name} @{stage_name}"
-            )
-            self.sf.cursor().execute(
+            ).close()
+            self.ibis.raw_sql(
                 f"""
                 COPY INTO {tb} 
                 FROM @{stage_name} 
                 FILE_FORMAT = (TYPE = 'PARQUET') 
                 MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
                 """
-            )
+            ).close()
         finally:
             os.remove(temp_file_name)
         return tb

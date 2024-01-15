@@ -49,15 +49,8 @@ class SnowflakeSQLEngine(IbisSQLEngine):
     def encode_column_name(self, name: str) -> str:
         return "`" + name.replace("`", "\\`") + "`"
 
-    # def get_temp_table_name(self) -> str:
-    #     return self.client.table_to_full_name(super().get_temp_table_name())
-
-    def to_df(self, df: Any, schema: Any = None) -> IbisDataFrame:
+    def to_df(self, df: Any, schema: Any = None) -> SnowflakeDataFrame:
         if isinstance(df, SnowflakeDataFrame):
-            # assert_or_throw(
-            #     schema is None,
-            #     ValueError("schema must be None when df is BigQueryDataFrame"),
-            # )
             return df
         if isinstance(df, DataFrame):
             res = self._register_df(
@@ -69,7 +62,7 @@ class SnowflakeSQLEngine(IbisSQLEngine):
         if isinstance(df, pa.Table):
             return self._register_df(df, schema=schema)
         if isinstance(df, IbisTable):
-            return SnowflakeClient(df, schema=schema)
+            return SnowflakeDataFrame(df, schema=schema)
         if isinstance(df, Iterable):
             adf = ArrowDataFrame(df, schema)
             xdf = self._register_df(adf.native, schema=schema)
@@ -169,8 +162,7 @@ class SnowflakeSQLEngine(IbisSQLEngine):
         self, df: pa.Table, name: Optional[str] = None, schema: Any = None
     ) -> SnowflakeDataFrame:
         tbn = self.client.arrow_to_table(df)
-        parts = tbn.split(".")
-        tb = self.backend.table(parts[2], database=parts[0] + "." + parts[1])
+        tb = self.backend.table(tbn)
         return SnowflakeDataFrame(tb, schema=schema)
 
 

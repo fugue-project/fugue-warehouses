@@ -7,7 +7,7 @@ from fugue_snowflake import SnowflakeClient
 from .mock_engine import MockSnowflakeExecutionEngine
 
 
-class BigQueryExecutionEngineTests(ExecutionEngineTests.Tests):
+class SnowflakeExecutionEngineTests(ExecutionEngineTests.Tests):
     @classmethod
     def setUpClass(cls):
         cls._client = SnowflakeClient.get_or_create(

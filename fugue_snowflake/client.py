@@ -17,7 +17,7 @@ from fugue import (
     LocalDataFrame,
     AnyDataFrame,
 )
-from ibis.formats.pyarrow import PyArrowSchema
+# from ibis.formats.pyarrow import PyArrowSchema
 from fugue_ibis import IbisTable
 from triad import ParamDict, Schema, SerializableRLock, assert_or_throw
 
@@ -305,9 +305,9 @@ class SnowflakeClient:
             raise TypeError(f"Unsupported schema type: {type(schema)}")
         
         # CURRENTLY CONVERTING TO IBIS SCHEMA DOESN'T WORK - METHOD REQUIRES `ibis-framework>=7.2.0`
-        ibis_schema = PyArrowSchema.to_ibis(schema)
+        # ibis_schema = PyArrowSchema.to_ibis(schema)
 
-        self.ibis.create_table(temp_table_name, schema=ibis_schema, temp=True)
+        # self.ibis.create_table(temp_table_name, schema=ibis_schema, temp=True)
 
         self._temp_tables.append(temp_table_name)
 

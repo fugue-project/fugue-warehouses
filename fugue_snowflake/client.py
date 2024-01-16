@@ -50,6 +50,15 @@ class SnowflakeClient:
 
         You can either provide the credentials directly with args or provide
         a dict with the credentials.
+
+        :param account: Snowflake account name, optional.
+        :param user: Snowflake user name, optional.
+        :param password: Snowflake password, optional.
+        :param database: Snowflake database name, optional.
+        :param schema: Snowflake schema name, optional.
+        :param role: Snowflake user role, optional.
+        :param credentials_func: Callable returning a dictionary of credentials, optional.
+        :raises AttributeError: If the required credentials are missing.
         """
         self._temp_tables: List[str] = []
         self._credentials_func = credentials_func
@@ -70,15 +79,17 @@ class SnowflakeClient:
             self._schema = credentials["schema"]
             self._role = credentials["role"]
         else:
-            raise AttributeError("Missing required credentials to connect to Snowflake.")
-            
+            raise AttributeError(
+                "Missing required credentials to connect to Snowflake."
+            )
+
         self._sf = snowflake.connector.connect(
             account=self._account,
             user=self._user,
             password=self._password,
             database=self._database,
             schema=self._schema,
-            role=self._role
+            role=self._role,
         )
 
         self._ibis = ibis.snowflake.connect(
@@ -91,6 +102,15 @@ class SnowflakeClient:
 
     @staticmethod
     def get_or_create(conf: Any = None) -> "SnowflakeClient":
+        """Get or create a SnowflakeClient instance.
+
+        This static method returns an existing SnowflakeClient instance or creates a new one
+        if none exists in the current context. The configuration can be provided to set up
+        the client.
+
+        :param conf: Configuration dictionary or None, defaults to None.
+        :return: An instance of SnowflakeClient.
+        """
         with _CONTEXT_LOCK:
             res = _FUGUE_SNOWFLAKE_CLIENT_CONTEXT.get()
             if res is None:
@@ -101,14 +121,20 @@ class SnowflakeClient:
                     credentials_func: Any = lambda: info
                 else:
                     credentials_func = None
-                res = SnowflakeClient(
-                    credentials_func=credentials_func
-                )
+                res = SnowflakeClient(credentials_func=credentials_func)
                 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT.set(res)  # type: ignore
             return res
 
     @staticmethod
     def get_current() -> "SnowflakeClient":
+        """Get the current SnowflakeClient instance.
+
+        This static method returns the current SnowflakeClient instance if initialized,
+        otherwise, it throws a ValueError.
+
+        :return: An instance of SnowflakeClient.
+        :raises ValueError: If no SnowflakeClient was initialized.
+        """
         with _CONTEXT_LOCK:
             res = _FUGUE_SNOWFLAKE_CLIENT_CONTEXT.get()
             assert_or_throw(
@@ -118,46 +144,114 @@ class SnowflakeClient:
 
     @property
     def sf(self) -> snowflake.connector.SnowflakeConnection:
+        """Get the Snowflake connection.
+
+        This property provides access to the underlying Snowflake connection.
+        It can be used for operations that require direct interaction with the
+        Snowflake database.
+
+        :return: The Snowflake connection associated with this SnowflakeClient.
+        """
         return self._sf
 
     def stop(self):
+        """Stop the SnowflakeClient instance.
+
+        This method drops any temporary tables created during the session and closes
+        the Snowflake connection.
+        """
         for tt in self._temp_tables:
             self._sf.cursor().execute(f"DROP TABLE IF EXISTS {tt}")
         self._sf.close()
 
     def __enter__(self) -> "SnowflakeClient":
+        """Enter the runtime context for the SnowflakeClient object.
+
+        This method returns the SnowflakeClient instance itself, allowing it to be used
+        with the 'with' statement.
+
+        :return: Self, the SnowflakeClient instance.
+        """
         return self
 
     def __exit__(
         self, exception_type: Any, exception_value: Any, exception_traceback: Any
     ) -> None:
+        """Exit the runtime context for the SnowflakeClient object.
+
+        This method is called upon exiting the 'with' statement and it triggers the
+        `stop` method to close the connection and clean up resources.
+
+        :param exception_type: The type of the exception, if raised in the 'with' block.
+        :param exception_value: The exception value, if raised.
+        :param exception_traceback: The traceback of the exception, if raised.
+        """
         self.stop()
 
     def connect_to_schema(self, schema: str) -> Any:
+        """Switch the current Snowflake schema to the specified one.
+
+        This method changes the active schema in the Snowflake session to the given schema.
+
+        :param schema: The name of the schema to switch to.
+        """
         self._sf.cursor().execute(f"USE SCHEMA {schema}")
 
     @property
     def ibis(self) -> ibis.BaseBackend:
+        """Get the Ibis connection.
+
+        This property provides access to the Ibis connection associated with the
+        SnowflakeClient. It can be used to perform Ibis-specific operations.
+
+        :return: The Ibis connection associated with this SnowflakeClient.
+        """
         return self._ibis
 
     def query_to_ibis(self, query: str) -> IbisTable:
+        """Execute a SQL query and return the result as an IbisTable object.
+
+        This method executes a given SQL query against Snowflake and returns the result
+        as an IbisTable, which can be used for further operations in Ibis.
+
+        :param query: The SQL query string to execute.
+        :return: An IbisTable containing the results of the query.
+        """
         return IbisTable(self.ibis.sql(query))
 
     def execute_to_df(
         self, query: str, columns: Optional[Schema] = None
     ) -> LocalDataFrame:
+        """Execute a SQL query and return the result as a DataFrame.
+
+        This method executes a SQL query in Snowflake and returns the result as a
+        LocalDataFrame. Optionally, a schema can be provided to define the structure
+        of the returned DataFrame.
+
+        :param query: The SQL query string to execute.
+        :param columns: Optional schema to apply to the resulting DataFrame.
+        :return: A LocalDataFrame containing the query results.
+        """
         cursor = self._sf.cursor()
         cursor.execute(query)
         rows = cursor.fetchall()
         if columns is None:
             cols = cursor.description
-            pa_schema = pa.schema(
-                [(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols]
-            )
+            pa_schema = pa.schema([(c[0], FIELD_TYPES[c[1]].pa_type()) for c in cols])
             columns = Schema(pa_schema)
         return ArrayDataFrame(rows, columns)
 
     def load_df(self, df: DataFrame, name: str, mode: str = "overwrite") -> None:
+        """Load a DataFrame into a Snowflake table.
+
+        This method loads a DataFrame into Snowflake, creating or appending to a table.
+        The mode determines whether the data should overwrite or append to the existing table.
+
+        :param df: The DataFrame to load into Snowflake.
+        :param name: The name of the Snowflake table.
+        :param mode: Mode of loading the DataFrame - 'overwrite' or 'append'.
+        :raises ValueError: If the mode is not supported.
+        """
         if isinstance(df, ArrayDataFrame):
             df_pandas = df.as_pandas()
         else:
@@ -178,12 +272,30 @@ class SnowflakeClient:
         mode: str = "overwrite",
         **kwargs: Any,
     ) -> Callable[[DataFrame], None]:
+        """Create a function to save a DataFrame to a specified path in Snowflake.
+
+        This method returns a function that can be used to save a DataFrame to a given
+        path in Snowflake, with the specified mode of operation.
+
+        :param path: The path where the DataFrame will be saved in Snowflake.
+        :param mode: Mode of saving the DataFrame - 'overwrite' or other supported modes.
+        :return: A function that takes a DataFrame as an argument and saves it to Snowflake.
+        """
+
         def _save(df: DataFrame) -> None:
             self.load_df(df, path, mode=mode, **kwargs)
 
         return _save
 
     def create_temp_table(self, schema: Schema | pa.Schema) -> str:
+        """Create a temporary table in Snowflake with a given schema.
+
+        This method creates a new temporary table in Snowflake with the specified schema
+        and returns the name of the created table.
+
+        :param schema: The schema to use for creating the temporary table.
+        :return: The name of the created temporary table.
+        """
         temp_table_name = f"temp_{uuid4().hex}".upper()
         if isinstance(schema, pa.Schema):
             pass
@@ -202,14 +314,40 @@ class SnowflakeClient:
         return temp_table_name
 
     def register_temp_table(self, name: str):
+        """Register a temporary table name within the SnowflakeClient.
+
+        This method keeps track of a temporary table by adding its name to the list of
+        managed temporary tables. It's useful for managing the lifecycle of temporary tables.
+
+        :param name: The name of the temporary table to register.
+        """
         self._temp_tables.append(name)
 
     def is_temp_table(self, name: str) -> bool:
+        """Check if a table name is a registered temporary table.
+
+        This method determines whether a given table name corresponds to a temporary table
+        managed by this SnowflakeClient instance.
+
+        :param name: The name of the table to check.
+        :return: True if the table is a registered temporary table, False otherwise.
+        """
         return name in self._temp_tables
 
     def df_to_table(
         self, df: AnyDataFrame, table_name: str = None, overwrite: bool = False
     ) -> Any:
+        """Convert a DataFrame to a Snowflake table.
+
+        This method converts a given DataFrame to a Snowflake table. If no table name is
+        provided, a temporary table is created. The method supports overwriting or appending
+        to an existing table.
+
+        :param df: The DataFrame to convert.
+        :param table_name: Optional name for the Snowflake table.
+        :param overwrite: Whether to overwrite an existing table, defaults to False.
+        :return: The name of the Snowflake table.
+        """
         if table_name is None:
             if isinstance(df, ArrayDataFrame):
                 schema = pa.Table.from_pandas(df.as_pandas()).schema
@@ -220,10 +358,17 @@ class SnowflakeClient:
         self.load_df(df, table_name, mode="overwrite" if overwrite else "append")
 
         return table_name
-    
-    def arrow_to_table(
-        self, ptable: pa.Table, table: Optional[str] = None
-    ) -> str:
+
+    def arrow_to_table(self, ptable: pa.Table, table: Optional[str] = None) -> str:
+        """Load a PyArrow table into Snowflake.
+
+        This method loads a PyArrow table into Snowflake, creating a temporary or specified
+        table. The data is first written to a Parquet file before being loaded into Snowflake.
+
+        :param ptable: The PyArrow table to load.
+        :param table: Optional name of the Snowflake table to create or update.
+        :return: The name of the Snowflake table where the data is loaded.
+        """
         tb = table or self.create_temp_table(ptable.schema)
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
             temp_file_name = tf.name

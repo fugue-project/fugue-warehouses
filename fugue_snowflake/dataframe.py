@@ -19,6 +19,7 @@ from .client import SnowflakeClient
 class SnowflakeDataFrame(IbisDataFrame):
     def __init__(self, table: IbisTable, schema: Any = None):
         super().__init__(table, schema)
+        self._table_ref = None
 
     def to_sql(self) -> str:
         return self.native.compile()

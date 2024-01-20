@@ -1,7 +1,7 @@
 import os
 import warnings
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from uuid import uuid4
 
 import fugue.api as fa
@@ -12,13 +12,14 @@ from fugue_ibis import IbisDataFrame, IbisTable
 from ibis import BaseBackend
 from sqlalchemy import exc as sa_exc
 from triad import ParamDict, SerializableRLock, assert_or_throw
-from trino.auth import BasicAuthentication
+from trino.auth import Authentication, BasicAuthentication
 from trino.dbapi import Connection as TrinoConnection
 from trino.dbapi import Cursor as TrinoCursor
 from trino.dbapi import connect
 from trino.exceptions import HttpError
 
 from ._constants import (
+    FUGUE_TRINO_CONF_AUTH,
     FUGUE_TRINO_CONF_CATALOG,
     FUGUE_TRINO_CONF_HOST,
     FUGUE_TRINO_CONF_PASSWORD,
@@ -51,6 +52,7 @@ class TrinoClient:
                 user = _conf.get_or_throw(FUGUE_TRINO_CONF_USER, str)
                 host = _conf.get_or_throw(FUGUE_TRINO_CONF_HOST, str)
                 password = _conf.get_or_none(FUGUE_TRINO_CONF_PASSWORD, str)
+                auth = _conf.get_or_none(FUGUE_TRINO_CONF_AUTH, Authentication)
                 port = _conf.get(FUGUE_TRINO_CONF_PORT, 443)
                 res = TrinoClient(
                     temp_schema=tds,
@@ -58,6 +60,7 @@ class TrinoClient:
                     user=user,
                     host=host,
                     password=password,
+                    auth=auth,
                     port=port,
                 )
                 _FUGUE_TRINO_CLIENT_CONTEXT.set(res)  # type: ignore
@@ -79,6 +82,7 @@ class TrinoClient:
         host: Optional[str] = None,
         user: Optional[str] = None,
         password: Optional[str] = None,
+        auth: Optional[Type[Authentication]] = None,
         port: int = 443,
         **connect_kwargs: Any,
     ):
@@ -102,6 +106,14 @@ class TrinoClient:
                 host=host,
                 port=port,
                 auth=BasicAuthentication(user, password),
+                http_scheme="https",
+            )
+        elif auth is not None:
+            self._trino_con = connect(
+                host=host,
+                port=port,
+                user=user,
+                auth=auth,
                 http_scheme="https",
             )
         else:

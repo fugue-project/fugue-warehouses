@@ -7,6 +7,7 @@ FUGUE_TRINO_CONF_HOST = "fugue.trino.host"
 FUGUE_TRINO_CONF_PORT = "fugue.trino.port"
 FUGUE_TRINO_CONF_USER = "fugue.trino.user"
 FUGUE_TRINO_CONF_PASSWORD = "fugue.trino.password"
+FUGUE_TRINO_CONF_AUTH = "fugue.trino.auth"
 
 FUGUE_TRINO_ENV_PASSWORD = "FUGUE_TRINO_PASSWORD"
 

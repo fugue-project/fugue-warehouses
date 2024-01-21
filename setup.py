@@ -32,7 +32,7 @@ setup(
     install_requires=[],
     extras_require={
         "bigquery": [
-            "fugue[ibis]>=0.8.4,<0.9",
+            "fugue[sql,ibis]>=0.9",
             "fs-gcsfs",
             "pandas-gbq",
             "google-auth",
@@ -40,11 +40,11 @@ setup(
             "ibis-framework[bigquery]",
         ],
         "trino": [
-            "fugue[ibis]>=0.8.4,<0.9",
+            "fugue[sql,ibis]>=0.9",
             "ibis-framework[trino]",
         ],
         "ray": ["fugue[ray]>=0.8.4,<0.9"],
-        "snowflake": ["fugue[ibis]>=0.8.4,<0.9", "ibis-framework[snowflake]"],
+        "snowflake": ["fugue[sql,ibis]==0.9.0.dev3", "ibis-framework[snowflake]"],
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"
@@ -55,6 +55,7 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3 :: Only",
     ],
     python_requires=">=3.8",

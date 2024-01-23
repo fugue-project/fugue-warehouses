@@ -17,6 +17,7 @@ from fugue import (
     LocalDataFrame,
     AnyDataFrame,
 )
+
 # from ibis.formats.pyarrow import PyArrowSchema
 from fugue_ibis import IbisTable
 from triad import ParamDict, Schema, SerializableRLock, assert_or_throw
@@ -303,7 +304,7 @@ class SnowflakeClient:
             schema = schema.pa_schema
         else:
             raise TypeError(f"Unsupported schema type: {type(schema)}")
-        
+
         # CURRENTLY CONVERTING TO IBIS SCHEMA DOESN'T WORK - METHOD REQUIRES `ibis-framework>=7.2.0`
         # ibis_schema = PyArrowSchema.to_ibis(schema)
 
@@ -376,9 +377,7 @@ class SnowflakeClient:
             pq.write_table(ptable, temp_file_name)
             stage_name = f"{tb}_STAGE"
             self.ibis.raw_sql(f"CREATE TEMP STAGE {stage_name}").close()
-            self.ibis.raw_sql(
-                f"PUT file://{temp_file_name} @{stage_name}"
-            ).close()
+            self.ibis.raw_sql(f"PUT file://{temp_file_name} @{stage_name}").close()
             self.ibis.raw_sql(
                 f"""
                 COPY INTO {tb} 

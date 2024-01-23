@@ -9,6 +9,7 @@ from ._utils import is_select_query
 from .client import SnowflakeClient
 from .dataframe import SnowflakeDataFrame
 
+
 def get_schema(query_or_table: str) -> Schema:
     """Get the schema of certain query or table
 

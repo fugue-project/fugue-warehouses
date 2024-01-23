@@ -1,0 +1,9 @@
+{
+    "user": "kklassa",
+    "password": "Apollo_2115",
+    "account": "PFMQBBV-WF85006",
+    "warehouse": "compute_wh",
+    "database": "fugue_db",
+    "schema": "public",
+    "role": "sysadmin"
+}

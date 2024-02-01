@@ -1,13 +1,14 @@
+import os
+from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, List, Optional
+from tempfile import TemporaryDirectory
+from typing import Any, Iterator, List, Optional
 from uuid import uuid4
 
 import ibis
-import pyarrow
 import pyarrow as pa
 import snowflake.connector
 from fugue import (
-    AnyDataFrame,
     ArrayDataFrame,
     ArrowDataFrame,
     DataFrame,
@@ -16,10 +17,19 @@ from fugue import (
     PartitionSpec,
 )
 from fugue_ibis import IbisTable
+from pyarrow.parquet import write_table as write_parquet
+from snowflake.connector.cursor import SnowflakeCursor
+from snowflake.connector.result_batch import ResultBatch
 from triad import Schema, SerializableRLock, assert_or_throw
 
 from ._constants import get_client_init_params
-from ._utils import to_schema
+from ._utils import (
+    get_arrow_from_batches,
+    pa_type_to_snowflake_type_str,
+    quote_name,
+    to_schema,
+    to_snowflake_schema,
+)
 
 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT = ContextVar(
     "_FUGUE_SNOWFLAKE_CLIENT_CONTEXT", default=None
@@ -31,12 +41,12 @@ _CONTEXT_LOCK = SerializableRLock()
 class SnowflakeClient:
     def __init__(
         self,
-        account: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        database: Optional[str] = None,
-        warehouse: Optional[str] = None,
-        schema: Optional[str] = None,
+        account: str,
+        user: str,
+        password: str,
+        database: str,
+        warehouse: str,
+        schema: str,
         role: Optional[str] = "ACCOUNTADMIN",
     ):
         self._temp_tables: List[str] = []
@@ -83,6 +93,33 @@ class SnowflakeClient:
     def sf(self) -> snowflake.connector.SnowflakeConnection:
         return self._sf
 
+    def __setstate__(self, state):
+        for k, v in state.items():
+            setattr(self, k, v)
+        self._ibis = ibis.snowflake.connect(
+            account=self._account,
+            user=self._user,
+            password=self._password,
+            warehouse=self._warehouse,
+            database=f"{self._database}/{self._schema}",
+            role=self._role,
+        )
+
+        con = self._ibis.con.connect()
+        self._sf: Any = con.connection.dbapi_connection  # type: ignore
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state["_sf"]
+        del state["_ibis"]
+        return state
+
+    @contextmanager
+    def cursor(self) -> Iterator[SnowflakeCursor]:
+        with self._ibis.con.connect() as con:
+            with con.connection.cursor() as cur:
+                yield cur
+
     def stop(self):
         # for tt in self._temp_tables:
         #    self.sf.cursor().execute(f"DROP TABLE IF EXISTS {tt}")
@@ -106,90 +143,210 @@ class SnowflakeClient:
     def query_to_ibis(self, query: str) -> IbisTable:
         return self.ibis.sql(query)
 
-    def query_to_arrow(self, query: str) -> pa.Table:
-        with self.sf.cursor() as cur:
-            cur.execute(
+    def query_to_result_batches(
+        self, query: str, cursor: Optional[SnowflakeCursor] = None
+    ) -> Optional[List[ResultBatch]]:
+        if cursor is None:
+            with self.cursor() as cur:
+                cur.execute(
+                    "alter session set python_connector_query_result_format='ARROW'"
+                )
+                cur.execute(query)
+                batches = cur.get_result_batches()
+        else:
+            cursor.execute(
                 "alter session set python_connector_query_result_format='ARROW'"
             )
-            cur.execute(query)
-            return cur.fetch_arrow_all()
+            cursor.execute(query)
+            batches = cursor.get_result_batches()
+        return batches
 
-    def query_to_engine_df(self, query: str, engine: ExecutionEngine) -> DataFrame:
-        tb = self.query_to_ibis(query)
-        schema = to_schema(tb.schema())
+    def query_to_arrow(
+        self,
+        query: str,
+        schema: Any = None,
+        infer_nested_types: bool = False,
+        cursor: Optional[SnowflakeCursor] = None,
+    ) -> pa.Table:
+        return get_arrow_from_batches(
+            self.query_to_result_batches(query, cursor=cursor),
+            schema=schema,
+            infer_nested_types=infer_nested_types,
+        )
 
-        with self.sf.cursor() as cur:
-            cur.execute(
-                "alter session set python_connector_query_result_format='ARROW'"
-            )
-            cur.execute(query)
-            batches = cur.get_result_batches()
+    def query_to_engine_df(
+        self,
+        query: str,
+        engine: ExecutionEngine,
+        schema: Any = None,
+        infer_nested_types: bool = False,
+        cursor: Optional[SnowflakeCursor] = None,
+    ) -> DataFrame:
+        if schema is not None:
+            _schema = schema if isinstance(schema, Schema) else Schema(schema)
+        else:
+            tb = self.query_to_ibis(query)
+            _schema = to_schema(tb.schema())
+
+        batches = self.query_to_result_batches(query, cursor=cursor)
 
         if batches is None or len(batches) == 0:
-            return ArrowDataFrame(schema=schema)
+            raise ValueError(f"No data returned from {query}")
 
         idx = ArrayDataFrame([[x] for x in range(len(batches))], "id:int")
 
         def _map(cursor: Any, df: LocalDataFrame) -> LocalDataFrame:
-            tbs: List[pa.Table] = []
-            for row in df.as_dict_iterable():
-                batch = batches[row["id"]]
-                tbs.append(batch.to_arrow())
-            res = pa.concat_tables(tbs)
-            return ArrowDataFrame(res)
+            _b = [batches[row["id"]] for row in df.as_dict_iterable()]  # type: ignore
+            adf = get_arrow_from_batches(
+                _b, schema=schema, infer_nested_types=infer_nested_types
+            )
+            return ArrowDataFrame(adf)
 
         res = engine.map_engine.map_dataframe(
             idx,
             _map,
-            output_schema=schema,
+            output_schema=_schema,
             partition_spec=PartitionSpec("per_row"),
         )
         return res
 
-    def load_df(self, df: DataFrame, name: str, mode: str = "overwrite") -> None:
-        if isinstance(df, ArrayDataFrame):
-            df_pandas = df.as_pandas()
-        else:
-            df_pandas = ArrowDataFrame(df).as_pandas()
-
-        if mode == "overwrite":
-            snowflake.connector.pandas_tools.write_pandas(
-                self.sf, df_pandas, name, overwrite=True
-            )
-        elif mode == "append":
-            snowflake.connector.pandas_tools.write_pandas(self.sf, df_pandas, name)
-        else:
-            raise ValueError(f"Unsupported mode: {mode}")
-
-    def create_temp_table(self, schema: Schema) -> str:
-        temp_table_name = f"_temp_{uuid4().hex}"
-        df = ArrayDataFrame(schema=schema)
-        df_pandas = df.as_pandas()
-
-        snowflake.connector.pandas_tools.write_pandas(
-            self.sf, df_pandas, temp_table_name, overwrite=True, table_type="temporary"
-        )
-
-        self._temp_tables.append(temp_table_name)
-
-        return temp_table_name
-
-    def register_temp_table(self, name: str):
-        self._temp_tables.append(name)
-
-    def is_temp_table(self, name: str) -> bool:
-        return name in self._temp_tables
+    def df_to_temp_table(
+        self, df: DataFrame, engine: ExecutionEngine, transient: bool = True
+    ) -> str:
+        with _Uploader(
+            self, self.sf.cursor(), self._database, self._schema
+        ) as uploader:
+            return uploader.to_temp_table(df, engine, transient=transient)
 
     def df_to_table(
-        self, df: AnyDataFrame, table_name: str = None, overwrite: bool = False
-    ) -> Any:
-        if table_name is None:
-            if isinstance(df, ArrayDataFrame):
-                schema = pyarrow.Table.from_pandas(df.as_pandas()).schema
-            else:
-                schema = ArrowDataFrame(df).schema
-            table_name = self.create_temp_table(schema)
+        self,
+        df: DataFrame,
+        table: str,
+        mode: str,
+        engine: ExecutionEngine,
+        table_type: str = "",
+    ) -> str:
+        with _Uploader(
+            self, self.sf.cursor(), self._database, self._schema
+        ) as uploader:
+            return uploader.to_table(
+                df, table, mode=mode, engine=engine, table_type=table_type
+            )
 
-        self.load_df(df, table_name, mode="overwrite" if overwrite else "append")
 
-        return table_name
+class _Uploader:
+    def __init__(
+        self,
+        client: SnowflakeClient,
+        cursor: SnowflakeCursor,
+        database: str,
+        schema: str,
+    ):
+        self._client = client
+        self._cursor = cursor
+        self._database = database
+        self._schema = schema
+        self._stage = self._get_full_rand_name()
+
+    def _get_full_rand_name(self) -> str:
+        return self._database + "." + self._schema + "." + _temp_rand_str().upper()
+
+    def __enter__(self) -> "_Uploader":
+        create_stage_sql = (
+            f"CREATE STAGE IF NOT EXISTS {self._stage}" " FILE_FORMAT=(TYPE=PARQUET)"
+        )
+        print(create_stage_sql)
+        self._cursor.execute(create_stage_sql).fetchall()
+        return self
+
+    def __exit__(
+        self, exception_type: Any, exception_value: Any, exception_traceback: Any
+    ) -> None:
+        drop_stage_sql = f"DROP STAGE IF EXISTS {self._stage}"
+        print(drop_stage_sql)
+        self._cursor.execute(drop_stage_sql).fetchall()
+
+    def to_temp_table(
+        self, df: DataFrame, engine: ExecutionEngine, transient: bool = False
+    ) -> str:
+        files = self.upload(df, engine)
+        table = self._create_temp_table(df.schema, transient=transient)
+        return self._copy_to_table(files, table)
+
+    def to_table(
+        self,
+        df: DataFrame,
+        table: str,
+        mode: str,
+        engine: ExecutionEngine,
+        table_type: str = "",
+    ) -> str:
+        files = self.upload(df, engine)
+        assert_or_throw(
+            mode in ["overwrite", "append"], ValueError(f"Unsupported mode: {mode}")
+        )
+        if mode == "overwrite":
+            self._cursor.execute(f"DROP TABLE IF EXISTS {table}").fetchall()
+            table = self._create_table(df.schema, table, table_type=table_type)
+        return self._copy_to_table(files, table)
+
+    def upload(self, df: DataFrame, engine: ExecutionEngine) -> List[str]:
+        stage_location = self._stage
+        client = self._client
+
+        def _map(cursor: Any, df: LocalDataFrame) -> LocalDataFrame:
+            file = _temp_rand_str() + ".parquet"
+            with TemporaryDirectory() as f:
+                path = os.path.join(f, file)
+                write_parquet(df.as_arrow(), path)
+                with client.cursor() as cur:
+                    cur.execute(f"PUT file://{path} @{stage_location}").fetchall()
+            return ArrayDataFrame([[file]], "file:str")
+
+        res = engine.map_engine.map_dataframe(
+            df,
+            _map,
+            output_schema=Schema("file:str"),
+            partition_spec=PartitionSpec(),
+            map_func_format_hint="pyarrow",
+        )
+        return res.as_pandas().file.tolist()
+
+    def _create_table(self, schema: Any, table: str, table_type: str) -> str:
+        expr = to_snowflake_schema(schema)
+        create_table_sql = f"CREATE {table_type.upper()} TABLE {table} ({expr})"
+        print(create_table_sql)
+        self._cursor.execute(create_table_sql)
+        return table
+
+    def _create_temp_table(self, schema: Any, transient: bool = False) -> str:
+        table = self._get_full_rand_name()
+        return self._create_table(schema, table, "TRANSIENT" if transient else "TEMP")
+
+    def _copy_to_table(self, files: List[str], table: str) -> str:
+        files_expr = ", ".join([f"'{x}'" for x in files])
+        copy_sql = (
+            f"COPY INTO {table} FROM"
+            f" @{self._stage}"
+            f" FILES = ({files_expr})"
+            f" FILE_FORMAT = (TYPE=PARQUET)"
+            f" MATCH_BY_COLUMN_NAME = CASE_SENSITIVE"
+        )
+        print(copy_sql)
+        res = self._cursor.execute(copy_sql).fetchall()
+        print(res)
+        return table
+
+
+def _temp_rand_str() -> str:
+    return "temp_" + str(uuid4()).split("-")[0]
+
+
+def _to_snowflake_select_schema(schema: Any) -> str:
+    _s = schema if isinstance(schema, Schema) else Schema(schema)
+    fields = []
+    for f in _s.fields:
+        fields.append(
+            f"$1:{quote_name(f.name)}::{pa_type_to_snowflake_type_str(f.type)}"
+        )
+    return ", ".join(fields)

@@ -43,7 +43,7 @@ setup(
             "fugue[sql,ibis]>=0.9",
             "ibis-framework[trino]",
         ],
-        "ray": ["fugue[ray]>=0.8.4,<0.9"],
+        "ray": ["fugue[ray]>=0.9"],
         "snowflake": ["fugue[sql,ibis]==0.9.0.dev3", "ibis-framework[snowflake]"],
     },
     classifiers=[

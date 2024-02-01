@@ -211,7 +211,7 @@ class SnowflakeClient:
         return res
 
     def df_to_temp_table(
-        self, df: DataFrame, engine: ExecutionEngine, transient: bool = True
+        self, df: DataFrame, engine: ExecutionEngine, transient: bool = False
     ) -> str:
         with _Uploader(
             self, self.sf.cursor(), self._database, self._schema

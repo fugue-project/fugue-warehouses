@@ -110,14 +110,11 @@ class TrinoSQLEngine(IbisSQLEngine):
         key_schema, end_schema = get_join_schemas(_df1, _df2, how=how, on=on)
         _filter = _df2.native[key_schema.names]
         on_fields = [_df1.native[k] == _filter[k] for k in key_schema]
+        suffixes = dict(lname="", rname="{name}" + _JOIN_RIGHT_SUFFIX)  # noqa
         if how.lower() in ["semi", "left_semi"]:
-            tb = _df1.native.inner_join(
-                _filter, on_fields, suffixes=("", _JOIN_RIGHT_SUFFIX)
-            )
+            tb = _df1.native.inner_join(_filter, on_fields, **suffixes)
         else:
-            tb = _df1.native.left_join(
-                _filter, on_fields, suffixes=("", _JOIN_RIGHT_SUFFIX)
-            )
+            tb = _df1.native.left_join(_filter, on_fields, **suffixes)
             tb = tb[tb[key_schema.names[0] + _JOIN_RIGHT_SUFFIX].isnull()]
         return self.to_df(tb[end_schema.names], schema=end_schema)
 

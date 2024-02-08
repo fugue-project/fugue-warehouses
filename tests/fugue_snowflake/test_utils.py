@@ -1,8 +1,34 @@
-from fugue_snowflake._utils import to_snowflake_schema, fix_snowflake_arrow_result
+from fugue_snowflake._utils import (
+    to_snowflake_schema,
+    fix_snowflake_arrow_result,
+    parse_table_name,
+    quote_name,
+    unquote_name,
+    build_package_list,
+)
+from importlib.metadata import version as get_version
 from triad import Schema
 from fugue_snowflake.client import SnowflakeClient
 from typing import Any
 from pytest import raises
+
+
+def test_quote_unquote_name():
+    assert quote_name("a") == '"a"'
+    assert quote_name('"a"') == '"""a"""'
+    assert unquote_name('"""a"""') == '"a"'
+    assert unquote_name('"a"') == "a"
+    assert unquote_name("a") == "a"
+
+
+def test_parse_table_name():
+    assert parse_table_name("") == []
+    assert parse_table_name("a") == ["a"]
+    assert parse_table_name('"a"') == ['"a"']
+    assert parse_table_name("a.b.c") == ["a", "b", "c"]
+    assert parse_table_name('a."b".c') == ["a", '"b"', "c"]
+    assert parse_table_name('"a"."b"."c"') == ['"a"', '"b"', '"c"']
+    assert parse_table_name('a."b"".x".c', normalize=True) == ["A", '"b"".x"', "C"]
 
 
 def test_to_snowflake_schema():
@@ -56,3 +82,12 @@ def test_to_snowflake_schema_with_temp_table():
     # not supported by snowflake
     # _assert("a:decimal(10,2)", "a:decimal(10,2)")
     # _assert("a:timestamp(ns,UTC)", 'a:timestamp(ns,UTC)')
+
+
+def test_build_package_list():
+    fv = get_version("fugue")
+    assert ["fugue==" + fv] == build_package_list(["fugue"])
+    assert ["fugue>=0.9"] == build_package_list(["fugue>=0.9"])
+    assert ["fugue>=0.9", "triad==0.5"] == build_package_list(
+        ["fugue>=0.9", "triad==0.5", "fugue>=0.9"]
+    )

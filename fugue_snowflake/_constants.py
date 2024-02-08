@@ -6,6 +6,10 @@ from triad import ParamDict
 _FUGUE_SF_ENV_PREFIX = "FUGUE_SF_"
 _FUGUE_SF_CONF_PREFIX = "fugue.sf."
 
+FUGUE_SF_CONF_PACKAGES = "fugue.sf.packages"
+FUGUE_SF_CONF_IMPORTS = "fugue.sf.imports"
+FUGUE_SF_CONF_CASE_SENSITIVE = "fugue.sf.case_sensitive"
+
 
 def get_client_init_params(conf: Any) -> Dict[str, Any]:
     _conf = ParamDict(conf)

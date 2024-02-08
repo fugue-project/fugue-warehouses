@@ -1,11 +1,13 @@
+import base64
 import os
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from tempfile import TemporaryDirectory
-from typing import Any, Iterator, List, Optional
-from uuid import uuid4
-
+from typing import Any, Callable, Iterable, Iterator, List, Optional
+import cloudpickle
 import ibis
+import pandas as pd
 import pyarrow as pa
 import snowflake.connector
 from fugue import (
@@ -14,6 +16,10 @@ from fugue import (
     DataFrame,
     ExecutionEngine,
     LocalDataFrame,
+    LocalDataFrameIterableDataFrame,
+    NativeExecutionEngine,
+    PandasDataFrame,
+    PartitionCursor,
     PartitionSpec,
 )
 from fugue_ibis import IbisTable
@@ -22,13 +28,19 @@ from snowflake.connector.cursor import SnowflakeCursor
 from snowflake.connector.result_batch import ResultBatch
 from triad import Schema, SerializableRLock, assert_or_throw
 
+from fugue_snowflake._utils import temp_rand_str
+
 from ._constants import get_client_init_params
 from ._utils import (
+    build_package_list,
     get_arrow_from_batches,
     pa_type_to_snowflake_type_str,
+    parse_table_name,
     quote_name,
     to_schema,
     to_snowflake_schema,
+    unquote_name,
+    is_select_query,
 )
 
 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT = ContextVar(
@@ -58,6 +70,8 @@ class SnowflakeClient:
         self._schema = schema
         self._role = role
 
+        self._parallelism = 0
+
         self._ibis = ibis.snowflake.connect(
             account=account,
             user=user,
@@ -68,6 +82,8 @@ class SnowflakeClient:
         )
 
         con = self._ibis.con.connect()
+        self._dialect = con.dialect
+        self._compiler = self._ibis.compiler
         self._sf: Any = con.connection.dbapi_connection  # type: ignore
 
     @staticmethod
@@ -96,7 +112,7 @@ class SnowflakeClient:
     def __setstate__(self, state):
         for k, v in state.items():
             setattr(self, k, v)
-        self._ibis = ibis.snowflake.connect(
+        self._ibis = ibis.fugue_snowflake.connect(
             account=self._account,
             user=self._user,
             password=self._password,
@@ -140,8 +156,111 @@ class SnowflakeClient:
     def ibis(self) -> ibis.BaseBackend:
         return self._ibis
 
-    def query_to_ibis(self, query: str) -> IbisTable:
-        return self.ibis.sql(query)
+    def get_current_parallelism(self) -> int:
+        if self._parallelism == 0:
+            try:
+                warehouse = self.command_to_pandas("SELECT CURRENT_WAREHOUSE()").iloc[
+                    0, 0
+                ]
+                all_warehouses = self.command_to_pandas("SHOW WAREHOUSES")
+                size = (
+                    all_warehouses[all_warehouses["name"] == warehouse]["size"]
+                    .iloc[0]
+                    .lower()
+                )
+                if size == "x-small":
+                    return 1
+                elif size == "small":
+                    return 2
+                elif size == "medium":
+                    return 4
+                elif size == "large":
+                    return 8
+                elif size == "x-large":
+                    return 16
+                elif "x-large" in size:
+                    return 16 * int(size.split("x-large")[0])
+                raise NotImplementedError(f"Unknown warehouse size: {size}")
+            except Exception:
+                raise
+                self._parallelism = 1
+        return self._parallelism
+
+    def table_to_full_name(self, table: str) -> str:
+        parts = parse_table_name(table)
+        if len(parts) == 1:
+            return f"{self._database}.{self._schema}.{parts[0]}"
+        if len(parts) == 2:
+            return f"{self._database}.{parts[0]}.{parts[1]}"
+        if len(parts) == 3:
+            return f"{parts[0]}.{parts[1]}.{parts[2]}"
+        raise ValueError(f"Invalid table name: {table}")
+
+    def table_exists(self, table: str) -> bool:
+        full_name = self.table_to_full_name(table)
+        parts = parse_table_name(full_name)
+        tb = unquote_name(parts[-1]).replace("'", "\\'")
+        sql = f"""
+        SHOW TERSE TABLES LIKE '{tb}'
+        IN {parts[0]}.{parts[1]}
+        LIMIT 1"""
+        print(sql)
+        with self.cursor() as cur:
+            res = cur.execute(sql).fetchall()
+            return len(res) > 0
+
+    def ibis_to_temp_table(self, table: IbisTable) -> str:
+        full_name = self.table_to_full_name(temp_rand_str())
+        qot = self.ibis_to_query_or_table(table, force_query=True)
+        with self.cursor() as cur:
+            cur.execute(f"CREATE TEMP TABLE {full_name} AS {qot}").fetchall()
+        return full_name
+
+    def ibis_to_table(self, table: IbisTable, name: str, mode: str) -> str:
+        full_name = self.table_to_full_name(name)
+        query = self.ibis_to_query_or_table(table, force_query=True)
+        with self.cursor() as cur:
+            if mode == "overwrite":
+                cur.execute(f"DROP TABLE IF EXISTS {full_name}")
+                cur.execute(f"CREATE OR REPLACE TABLE {full_name} AS {query}")
+            elif mode == "append":
+                if not self.table_exists(name):
+                    cur.execute(f"CREATE TABLE {full_name} AS {query}")
+                else:
+                    cur.execute(f"INSERT INTO {full_name} {query}")
+            else:
+                raise NotImplementedError(f"Unsupported mode: {mode}")
+        return full_name
+
+    def ibis_to_query_or_table(
+        self, table: IbisTable, force_query: bool = False
+    ) -> str:
+        if table.has_name() and not force_query:
+            return table.get_name()
+        query_ast = self._compiler.to_ast_ensure_limit(table)
+        res = str(
+            query_ast.compile().compile(
+                dialect=self._dialect, compile_kwargs={"literal_binds": True}
+            )
+        )
+        print("ibis_to_query", force_query, res)
+        return res
+
+    def query_or_table_to_ibis(self, query_or_table: str) -> IbisTable:
+        if is_select_query(query_or_table):
+            full_name = self.table_to_full_name("VIEW_" + temp_rand_str())
+            with self.cursor() as cur:
+                view_sql = f"CREATE TEMP VIEW {full_name} AS {query_or_table}"
+                print(view_sql)
+                cur.execute(view_sql).fetchall()
+        else:
+            full_name = self.table_to_full_name(query_or_table)
+        parts = parse_table_name(full_name, normalize=True)
+        return self.ibis.table(
+            unquote_name(parts[2]),
+            database=unquote_name(parts[0]),
+            schema=unquote_name(parts[1]),
+        )
 
     def query_to_result_batches(
         self, query: str, cursor: Optional[SnowflakeCursor] = None
@@ -174,6 +293,18 @@ class SnowflakeClient:
             infer_nested_types=infer_nested_types,
         )
 
+    def ibis_to_arrow(
+        self,
+        table: IbisTable,
+        schema: Any = None,
+        infer_nested_types: bool = False,
+        cursor: Optional[SnowflakeCursor] = None,
+    ) -> pa.Table:
+        query = self.ibis_to_query_or_table(table, force_query=True)
+        return self.query_to_arrow(
+            query, schema=schema, infer_nested_types=infer_nested_types, cursor=cursor
+        )
+
     def query_to_engine_df(
         self,
         query: str,
@@ -182,10 +313,12 @@ class SnowflakeClient:
         infer_nested_types: bool = False,
         cursor: Optional[SnowflakeCursor] = None,
     ) -> DataFrame:
+        if _is_snowflake_engine(engine):
+            return engine.to_df(self.query_or_table_to_ibis(query), schema=schema)
         if schema is not None:
             _schema = schema if isinstance(schema, Schema) else Schema(schema)
         else:
-            tb = self.query_to_ibis(query)
+            tb = self.query_or_table_to_ibis(query)
             _schema = to_schema(tb.schema())
 
         batches = self.query_to_result_batches(query, cursor=cursor)
@@ -226,12 +359,96 @@ class SnowflakeClient:
         engine: ExecutionEngine,
         table_type: str = "",
     ) -> str:
+        if _is_snowflake_engine(engine):
+            _df = engine.to_df(df)
+            self.ibis_to_table(_df.native, table, mode=mode)
         with _Uploader(
             self, self.sf.cursor(), self._database, self._schema
         ) as uploader:
             return uploader.to_table(
-                df, table, mode=mode, engine=engine, table_type=table_type
+                df,
+                self.table_to_full_name(table),
+                mode=mode,
+                engine=engine,
+                table_type=table_type,
             )
+
+    def command_to_pandas(self, command: str) -> pd.DataFrame:
+        with self.cursor() as cur:
+            data = cur.execute(command).fetchall()
+            columns = [x[0] for x in cur.description]
+            return pd.DataFrame(data, columns=columns)
+
+    def register_udtf(
+        self,
+        df: DataFrame,
+        map_func: Callable[[PartitionCursor, LocalDataFrame], LocalDataFrame],
+        output_schema: Any,
+        partition_spec: PartitionSpec,
+        on_init: Optional[Callable[[int, DataFrame], Any]],
+        additional_packages: str,
+    ) -> str:
+        schema = df.schema
+        output_schema = Schema(output_schema)
+        cursor = partition_spec.get_cursor(schema, 0)
+        self.additional_packages = additional_packages
+
+        def _run(pdf: pd.DataFrame) -> Iterable[pd.DataFrame]:  # pragma: no cover
+            # the function must be defined here, so that it can be pickled
+            # without unnecessary dependencies
+            if pdf.shape[0] == 0:
+                yield output_schema.create_empty_pandas_df()
+                return
+            input_df = PandasDataFrame(pdf, schema, pandas_df_wrapper=True)
+            if on_init is not None:
+                on_init(0, input_df)
+            cursor.set(lambda: input_df.peek_array(), 0, 0)
+            output_df = map_func(cursor, input_df)
+            if isinstance(output_df, LocalDataFrameIterableDataFrame):
+                for res in output_df.native:
+                    yield res.as_pandas()
+            else:
+                yield output_df.as_pandas()
+
+        udtf_name = "FUGUE_" + temp_rand_str()
+        blob = base64.b64encode(cloudpickle.dumps(_run)).decode("ascii")
+        _input_schema = to_snowflake_schema(schema)
+        _output_schema = to_snowflake_schema(output_schema)
+        pv = sys.version_info
+        python_version = f"{pv.major}.{pv.minor}"
+        packages = ["pandas", "cloudpickle", "fugue==0.8.7"]
+        if self.additional_packages != "":
+            packages.extend(
+                x.strip().replace(" ", "") for x in self.additional_packages.split(",")
+            )
+        package_list = str(tuple(build_package_list(packages)))
+        udtf_create = f"""
+CREATE OR REPLACE TEMP FUNCTION {udtf_name}({_input_schema})
+RETURNS TABLE ({_output_schema})
+LANGUAGE PYTHON
+RUNTIME_VERSION={python_version}
+PACKAGES={package_list}
+--IMPORTS=('@fugue_staging/fugue-warehouses.zip')
+HANDLER='FugueTransformer'
+AS $$
+from _snowflake import vectorized
+import pandas as pd
+import cloudpickle
+import base64
+
+class FugueTransformer:
+    @vectorized(input=pd.DataFrame)
+    def end_partition(self, df):
+        blob = '{blob}'
+        func = cloudpickle.loads(base64.b64decode(blob.encode("ascii")))
+        yield from func(df)
+$$;"""
+        print(udtf_create)
+        with self.cursor() as cur:
+            # cur.execute("CREATE TEMP STAGE IF NOT EXISTS fugue_staging;")
+            # cur.execute("PUT file:///tmp/fugue-warehouses.zip @fugue_staging/")
+            cur.execute(udtf_create)
+        return udtf_name
 
 
 class _Uploader:
@@ -249,7 +466,7 @@ class _Uploader:
         self._stage = self._get_full_rand_name()
 
     def _get_full_rand_name(self) -> str:
-        return self._database + "." + self._schema + "." + _temp_rand_str().upper()
+        return self._database + "." + self._schema + "." + temp_rand_str().upper()
 
     def __enter__(self) -> "_Uploader":
         create_stage_sql = (
@@ -291,11 +508,15 @@ class _Uploader:
         return self._copy_to_table(files, table)
 
     def upload(self, df: DataFrame, engine: ExecutionEngine) -> List[str]:
+        if _is_snowflake_engine(engine):
+            _engine = NativeExecutionEngine()
+        else:
+            _engine = engine
         stage_location = self._stage
         client = self._client
 
         def _map(cursor: Any, df: LocalDataFrame) -> LocalDataFrame:
-            file = _temp_rand_str() + ".parquet"
+            file = temp_rand_str() + ".parquet"
             with TemporaryDirectory() as f:
                 path = os.path.join(f, file)
                 write_parquet(df.as_arrow(), path)
@@ -303,7 +524,7 @@ class _Uploader:
                     cur.execute(f"PUT file://{path} @{stage_location}").fetchall()
             return ArrayDataFrame([[file]], "file:str")
 
-        res = engine.map_engine.map_dataframe(
+        res = _engine.map_engine.map_dataframe(
             df,
             _map,
             output_schema=Schema("file:str"),
@@ -338,10 +559,6 @@ class _Uploader:
         return table
 
 
-def _temp_rand_str() -> str:
-    return "temp_" + str(uuid4()).split("-")[0]
-
-
 def _to_snowflake_select_schema(schema: Any) -> str:
     _s = schema if isinstance(schema, Schema) else Schema(schema)
     fields = []
@@ -350,3 +567,7 @@ def _to_snowflake_select_schema(schema: Any) -> str:
             f"$1:{quote_name(f.name)}::{pa_type_to_snowflake_type_str(f.type)}"
         )
     return ", ".join(fields)
+
+
+def _is_snowflake_engine(engine: ExecutionEngine) -> bool:
+    return hasattr(engine, "_is_snowflake_engine") and engine._is_snowflake_engine

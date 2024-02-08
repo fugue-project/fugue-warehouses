@@ -1,8 +1,12 @@
-from typing import Any, Dict, List, Optional
+import re
+from importlib.metadata import version as get_version
+from typing import Any, Dict, Iterable, List, Optional, Set
+from uuid import uuid4
 
 import pyarrow as pa
-from fugue_ibis import IbisSchema
+from fugue_ibis import IbisSchema, IbisTable
 from fugue_ibis._utils import to_schema as _to_schema
+from ibis.backends.snowflake import Backend
 from snowflake.connector.constants import FIELD_TYPES
 from snowflake.connector.result_batch import ResultBatch
 from triad import Schema
@@ -12,6 +16,7 @@ from triad.utils.pyarrow import (
     parse_json_columns,
     replace_types_in_table,
 )
+
 
 _PA_TYPE_TO_SF_TYPE: Dict[pa.DataType, str] = {
     pa.string(): "STRING",
@@ -35,6 +40,48 @@ _PA_TYPE_TO_SF_TYPE: Dict[pa.DataType, str] = {
 def quote_name(name: str) -> str:
     quote = '"'
     return quote + name.replace(quote, quote + quote) + quote
+
+
+def unquote_name(name: str) -> str:
+    name = (
+        name.replace('""', "<DOUBLE_QUOTE>")
+        .replace('"', "")
+        .replace("<DOUBLE_QUOTE>", '"')
+    )
+    return name
+
+
+def normalize_name(name: str) -> str:
+    if name.startswith('"') and name.endswith('"'):
+        return name
+    return name.upper()
+
+
+def parse_table_name(name: str, normalize: bool = False) -> List[str]:
+    res: List[str] = []
+    start, p = 0, 0
+    while p < len(name):
+        if name[p] == '"':
+            p += 1
+            while p < len(name):
+                if name[p] == '"':
+                    if p + 1 < len(name) and name[p + 1] == '"':
+                        p += 1
+                    else:
+                        break
+                p += 1
+            p += 1
+        elif name[p] == ".":
+            res.append(name[start:p])
+            start = p + 1
+            p += 1
+        else:
+            p += 1
+    if start < len(name):
+        res.append(name[start:])
+    if normalize:
+        return [normalize_name(x) for x in res]
+    return res
 
 
 def to_schema(schema: IbisSchema) -> Schema:
@@ -74,6 +121,14 @@ def fix_snowflake_arrow_result(result: pa.Table) -> pa.Table:
     return replace_types_in_table(
         result,
         [
+            (lambda tp: pa.types.is_integer(tp), pa.int64()),
+            (lambda tp: pa.types.is_floating(tp), pa.float64()),
+            (
+                lambda tp: pa.types.is_decimal(tp)
+                and tp.precision == 38
+                and tp.scale == 0,
+                pa.int64(),
+            ),
             (lambda tp: pa.types.is_date64(tp), pa.date32()),
             (
                 lambda tp: pa.types.is_timestamp(tp)
@@ -83,6 +138,15 @@ def fix_snowflake_arrow_result(result: pa.Table) -> pa.Table:
             ),
         ],
     )
+
+
+def is_sf_ibis_table(df: Any):
+    if not isinstance(df, IbisTable):
+        return False
+    try:
+        return isinstance(df._find_backend(), Backend)
+    except Exception:  # pragma: no cover
+        return False
 
 
 def to_snowflake_schema(schema: Any) -> str:
@@ -126,3 +190,24 @@ def _get_nested_columns(batch: ResultBatch) -> List[str]:
         if f.name in ["OBJECT", "ARRAY", "MAP", "VARIANT"]:
             res.append(meta.name)
     return res
+
+
+def temp_rand_str() -> str:
+    return ("temp_" + str(uuid4()).split("-")[0]).upper()
+
+
+def build_package_list(packages: Iterable[str]) -> List[str]:
+    ps: Set[str] = set()
+    for p in packages:
+        if "=" in p or "<" in p or ">" in p:
+            ps.add(p)
+        else:
+            ps.add(p + "==" + get_version(p))
+    return list(ps)
+
+
+def is_select_query(s: str) -> bool:
+    return (
+        re.match(r"^\s*select\s", s, re.IGNORECASE) is not None
+        or re.match(r"^\s*with\s", s, re.IGNORECASE) is not None
+    )

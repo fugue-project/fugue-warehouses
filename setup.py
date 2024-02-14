@@ -37,16 +37,16 @@ setup(
             "pandas-gbq",
             "google-auth",
             "db-dtypes",
-            "ibis-framework[bigquery]",
+            "ibis-framework[bigquery]<9",
         ],
         "trino": [
             "fugue[sql,ibis]>=0.9",
-            "ibis-framework[trino]",
+            "ibis-framework[trino]<9",
         ],
         "ray": ["fugue[ray]>=0.9"],
         "snowflake": [
             "fugue[sql,ibis]==0.9.0.dev3",
-            "ibis-framework[snowflake]",
+            "ibis-framework[snowflake]<9",
             "snowflake-connector-python[pandas]",
             "snowflake-snowpark-python",
             "snowflake-cli-labs",
@@ -74,6 +74,7 @@ setup(
         ],
         "ibis.backends": [
             "fugue_trino = fugue_trino.ibis_trino",
+            "fugue_snowflake = fugue_snowflake.ibis_snowflake",
         ],
     },
 )

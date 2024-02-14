@@ -249,7 +249,9 @@ class SnowflakeMapEngine(IbisMapEngine):
                 part = f"ABS(HASH({partitions_cols}) % {num})"
                 query = self._udtf_template(part, dot, udtf, input_cols, order_by)
         else:  # no partition key
-            if algo == "default":
+            if (
+                algo == "default"
+            ):  # TODO: snowflake doesn't support as-is map_partitions
                 algo = "hash"
             if algo == "even":
                 if partition_spec.num_partitions.upper() == KEYWORD_ROWCOUNT:

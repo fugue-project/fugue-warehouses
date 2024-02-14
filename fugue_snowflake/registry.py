@@ -47,7 +47,8 @@ def _parse_sf(engine: str, conf: Any, **kwargs) -> ExecutionEngine:
 @infer_execution_engine.candidate(
     lambda objs: is_pandas_or(objs, SnowflakeDataFrame)
     or any(
-        is_sf_ibis_table(x) or (isinstance(x, str) and x == "force_sf") for x in objs
+        is_sf_ibis_table(x) or _is_sf(x) or (isinstance(x, str) and x == "force_sf")
+        for x in objs
     )
 )
 def _infer_sf_engine(objs: Any) -> Any:

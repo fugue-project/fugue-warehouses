@@ -77,10 +77,8 @@ def load(
     if not is_select_query(qot):
         query = f"SELECT * FROM {qot}"
     with fa.engine_context(engine, engine_conf=engine_conf, infer_by=["force_sf"]) as e:
-        print(e)
         client = SnowflakeClient.get_or_create(fa.get_current_conf())
         if isinstance(e, SnowflakeExecutionEngine):
-            print(qot)
             res: Any = client.query_or_table_to_ibis(qot)
             return SnowflakeDataFrame(res) if as_fugue else res
         elif not e.is_distributed and e.get_current_parallelism() <= 1:

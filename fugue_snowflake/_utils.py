@@ -11,12 +11,10 @@ from snowflake.connector.constants import FIELD_TYPES
 from snowflake.connector.result_batch import ResultBatch
 from triad import Schema
 from triad.utils.pyarrow import (
-    TRIAD_DEFAULT_TIMESTAMP,
     get_alter_func,
     parse_json_columns,
     replace_types_in_table,
 )
-
 
 _PA_TYPE_TO_SF_TYPE: Dict[pa.DataType, str] = {
     pa.string(): "STRING",
@@ -130,12 +128,12 @@ def fix_snowflake_arrow_result(result: pa.Table) -> pa.Table:
                 pa.int64(),
             ),
             (lambda tp: pa.types.is_date64(tp), pa.date32()),
-            (
-                lambda tp: pa.types.is_timestamp(tp)
-                and tp.tz is None
-                and tp != TRIAD_DEFAULT_TIMESTAMP,
-                TRIAD_DEFAULT_TIMESTAMP,
-            ),
+            # (
+            #     lambda tp: pa.types.is_timestamp(tp)
+            #     and tp.tz is None
+            #     and tp != TRIAD_DEFAULT_TIMESTAMP,
+            #     TRIAD_DEFAULT_TIMESTAMP,
+            # ),
         ],
     )
 
@@ -159,7 +157,8 @@ def to_snowflake_schema(schema: Any) -> str:
 
 def get_arrow_from_batches(
     batches: Optional[List[ResultBatch]],
-    schema: None = None,
+    query_output_schema: Schema,
+    schema: Any = None,
     infer_nested_types: bool = False,
 ) -> pa.Table:
     if batches is None or len(batches) == 0:
@@ -167,20 +166,31 @@ def get_arrow_from_batches(
             return (
                 schema if isinstance(schema, Schema) else Schema(schema)
             ).create_empty_arrow_table()
-        raise ValueError("No result")
+        return query_output_schema.create_empty_arrow_table()
+
+    def _batches_to_arrow(_batches: List[ResultBatch]) -> Iterable[pa.Table]:
+        has_result = False
+        for batch in _batches:
+            adf = batch.to_arrow()
+            if adf.num_rows == 0:
+                continue
+            func = get_alter_func(adf.schema, query_output_schema.pa_schema, safe=True)
+            has_result = True
+            yield func(adf)
+
+        if not has_result:
+            yield query_output_schema.create_empty_arrow_table()
+
+    adf = pa.concat_tables(_batches_to_arrow(batches))
+
     nested_cols = _get_nested_columns(batches[0])
-    adf = pa.concat_tables([x.to_arrow() for x in batches])
-    if adf.num_rows == 0:
-        return fix_snowflake_arrow_result(adf)
-    if schema is None:
-        adf = fix_snowflake_arrow_result(adf)
-        if infer_nested_types and len(nested_cols) > 0:
-            adf = parse_json_columns(adf, nested_cols)
-        return adf
-    _schema = schema if isinstance(schema, Schema) else Schema(schema)
-    adf = parse_json_columns(adf, nested_cols)
-    func = get_alter_func(adf.schema, _schema.pa_schema, safe=True)
-    return func(adf)
+    if infer_nested_types and len(nested_cols) > 0:
+        adf = parse_json_columns(adf, nested_cols)
+    if schema is not None:
+        _schema = schema if isinstance(schema, Schema) else Schema(schema)
+        func = get_alter_func(adf.schema, _schema.pa_schema, safe=True)
+        adf = func(adf)
+    return adf
 
 
 def _get_nested_columns(batch: ResultBatch) -> List[str]:
@@ -192,6 +202,13 @@ def _get_nested_columns(batch: ResultBatch) -> List[str]:
     return res
 
 
+def _get_batch_arrow_schema(batch: ResultBatch) -> pa.Schema:
+    fields = [
+        pa.field(s.name, FIELD_TYPES[s.type_code].pa_type()) for s in batch.schema
+    ]
+    return pa.schema(fields)
+
+
 def temp_rand_str() -> str:
     return ("temp_" + str(uuid4()).split("-")[0]).upper()
 
@@ -199,10 +216,15 @@ def temp_rand_str() -> str:
 def build_package_list(packages: Iterable[str]) -> List[str]:
     ps: Set[str] = set()
     for p in packages:
-        if "=" in p or "<" in p or ">" in p:
+        ps.add(p)
+        continue
+        try:
+            if "=" in p or "<" in p or ">" in p:
+                ps.add(p)
+            else:
+                ps.add(p + "==" + get_version(p))
+        except Exception:  # pragma: no cover
             ps.add(p)
-        else:
-            ps.add(p + "==" + get_version(p))
     return list(ps)
 
 

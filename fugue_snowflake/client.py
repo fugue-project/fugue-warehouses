@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Iterator, List, Optional
+
 import cloudpickle
 import ibis
 import pandas as pd
@@ -30,17 +31,15 @@ from triad import Schema, SerializableRLock, assert_or_throw
 
 from fugue_snowflake._utils import temp_rand_str
 
-from ._constants import get_client_init_params
+from ._constants import FUGUE_SF_LOGGER, get_client_init_params
 from ._utils import (
     build_package_list,
     get_arrow_from_batches,
-    pa_type_to_snowflake_type_str,
+    is_select_query,
     parse_table_name,
-    quote_name,
     to_schema,
     to_snowflake_schema,
     unquote_name,
-    is_select_query,
 )
 
 _FUGUE_SNOWFLAKE_CLIENT_CONTEXT = ContextVar(
@@ -51,6 +50,8 @@ _CONTEXT_LOCK = SerializableRLock()
 
 
 class SnowflakeClient:
+    logger = FUGUE_SF_LOGGER
+
     def __init__(
         self,
         account: str,
@@ -203,7 +204,7 @@ class SnowflakeClient:
         SHOW TERSE TABLES LIKE '{tb}'
         IN {parts[0]}.{parts[1]}
         LIMIT 1"""
-        print(sql)
+        self.logger.debug(sql)
         with self.cursor() as cur:
             res = cur.execute(sql).fetchall()
             return len(res) > 0
@@ -242,7 +243,7 @@ class SnowflakeClient:
                 dialect=self._dialect, compile_kwargs={"literal_binds": True}
             )
         )
-        print("ibis_to_query", force_query, res)
+        self.logger.debug("ibis_to_query %s %s", force_query, res)
         return res
 
     def query_or_table_to_ibis(self, query_or_table: str) -> IbisTable:
@@ -250,7 +251,7 @@ class SnowflakeClient:
             full_name = self.table_to_full_name("VIEW_" + temp_rand_str())
             with self.cursor() as cur:
                 view_sql = f"CREATE TEMP VIEW {full_name} AS {query_or_table}"
-                print(view_sql)
+                self.logger.debug(view_sql)
                 cur.execute(view_sql).fetchall()
         else:
             full_name = self.table_to_full_name(query_or_table)
@@ -310,7 +311,6 @@ class SnowflakeClient:
         query: str,
         engine: ExecutionEngine,
         schema: Any = None,
-        infer_nested_types: bool = False,
         cursor: Optional[SnowflakeCursor] = None,
     ) -> DataFrame:
         it = self.query_or_table_to_ibis(query)
@@ -336,7 +336,7 @@ class SnowflakeClient:
                 _b,
                 query_output_schema=table_schema,
                 schema=_schema,
-                infer_nested_types=infer_nested_types,
+                infer_nested_types=False,
             )
             return ArrowDataFrame(adf)
 
@@ -448,7 +448,7 @@ class FugueTransformer:
         func = cloudpickle.loads(base64.b64decode(blob.encode("ascii")))
         yield from func(df)
 $$;"""
-        print(udtf_create)
+        self.logger.debug(udtf_create)
         with self.cursor() as cur:
             # cur.execute("CREATE TEMP STAGE IF NOT EXISTS fugue_staging;")
             # cur.execute("PUT file:///tmp/fugue-warehouses.zip @fugue_staging/")
@@ -478,7 +478,7 @@ class _Uploader:
             f"CREATE STAGE IF NOT EXISTS {self._stage}"
             " FILE_FORMAT=(TYPE=PARQUET USE_LOGICAL_TYPE=TRUE BINARY_AS_TEXT=FALSE)"
         )
-        print(create_stage_sql)
+        self._client.logger.debug(create_stage_sql)
         self._cursor.execute(create_stage_sql).fetchall()
         return self
 
@@ -486,7 +486,7 @@ class _Uploader:
         self, exception_type: Any, exception_value: Any, exception_traceback: Any
     ) -> None:
         drop_stage_sql = f"DROP STAGE IF EXISTS {self._stage}"
-        print(drop_stage_sql)
+        self._client.logger.debug(drop_stage_sql)
         self._cursor.execute(drop_stage_sql).fetchall()
 
     def to_temp_table(
@@ -544,7 +544,7 @@ class _Uploader:
     def _create_table(self, schema: Any, table: str, table_type: str) -> str:
         expr = to_snowflake_schema(schema)
         create_table_sql = f"CREATE {table_type.upper()} TABLE {table} ({expr})"
-        print(create_table_sql)
+        self._client.logger.debug(create_table_sql)
         self._cursor.execute(create_table_sql)
         return table
 
@@ -561,20 +561,10 @@ class _Uploader:
             f" FILE_FORMAT = (TYPE=PARQUET USE_LOGICAL_TYPE=TRUE BINARY_AS_TEXT=FALSE)"
             f" MATCH_BY_COLUMN_NAME = CASE_SENSITIVE"
         )
-        print(copy_sql)
+        self._client.logger.debug(copy_sql)
         res = self._cursor.execute(copy_sql).fetchall()
-        print(res)
+        self._client.logger.debug(res)
         return table
-
-
-def _to_snowflake_select_schema(schema: Any) -> str:
-    _s = schema if isinstance(schema, Schema) else Schema(schema)
-    fields = []
-    for f in _s.fields:
-        fields.append(
-            f"$1:{quote_name(f.name)}::{pa_type_to_snowflake_type_str(f.type)}"
-        )
-    return ", ".join(fields)
 
 
 def _is_snowflake_engine(engine: ExecutionEngine) -> bool:

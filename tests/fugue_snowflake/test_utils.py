@@ -77,7 +77,7 @@ def test_to_snowflake_schema_with_temp_table():
     _assert("a:float16,b:float32,c:float64", "a:double,b:double,c:double")
     _assert("a:bool,b:str,d:bytes", "a:bool,b:str,d:bytes")
     _assert("a:date,b:datetime", "a:date,b:datetime")
-    _assert("a:[long]", "a:[long]")
+    _assert("a:[long]", "a:str")
 
     # not supported by snowflake
     # _assert("a:decimal(10,2)", "a:decimal(10,2)")

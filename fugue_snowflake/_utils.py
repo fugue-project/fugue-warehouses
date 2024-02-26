@@ -2,10 +2,10 @@ import re
 from importlib.metadata import version as get_version
 from typing import Any, Dict, Iterable, List, Optional, Set
 from uuid import uuid4
-
+import ibis.expr.datatypes as dt
 import pyarrow as pa
 from fugue_ibis import IbisSchema, IbisTable
-from fugue_ibis._utils import to_schema as _to_schema
+from fugue_ibis._utils import ibis_to_pa_type
 from ibis.backends.snowflake import Backend
 from snowflake.connector.constants import FIELD_TYPES
 from snowflake.connector.result_batch import ResultBatch
@@ -83,7 +83,25 @@ def parse_table_name(name: str, normalize: bool = False) -> List[str]:
 
 
 def to_schema(schema: IbisSchema) -> Schema:
-    return _to_schema(schema)
+    fields: List[Any] = []
+    for n, t in zip(schema.names, schema.types):
+        if _ibis_has_json(t):
+            fields.append((n, pa.string()))
+        else:
+            fields.append((n, ibis_to_pa_type(t)))
+    return Schema(fields)
+
+
+def _ibis_has_json(tp: dt.DataType) -> bool:
+    if isinstance(tp, dt.Array):
+        return _ibis_has_json(tp.value_type)
+    if isinstance(tp, dt.Struct):
+        for t in tp.types:
+            if _ibis_has_json(t):
+                return True
+    if isinstance(tp, dt.Map):
+        return _ibis_has_json(tp.value_type)
+    return isinstance(tp, dt.JSON)
 
 
 def pa_type_to_snowflake_type_str(tp: pa.DataType) -> str:
@@ -161,6 +179,7 @@ def get_arrow_from_batches(
     schema: Any = None,
     infer_nested_types: bool = False,
 ) -> pa.Table:
+    output_schema_has_nested = False
     if batches is None or len(batches) == 0:
         if schema is not None:
             return (
@@ -184,10 +203,12 @@ def get_arrow_from_batches(
     adf = pa.concat_tables(_batches_to_arrow(batches))
 
     nested_cols = _get_nested_columns(batches[0])
-    if infer_nested_types and len(nested_cols) > 0:
-        adf = parse_json_columns(adf, nested_cols)
     if schema is not None:
         _schema = schema if isinstance(schema, Schema) else Schema(schema)
+        output_schema_has_nested = any(pa.types.is_nested(tp) for tp in _schema.types)
+    if (output_schema_has_nested or infer_nested_types) and len(nested_cols) > 0:
+        adf = parse_json_columns(adf, nested_cols)
+    if schema is not None:
         func = get_alter_func(adf.schema, _schema.pa_schema, safe=True)
         adf = func(adf)
     return adf

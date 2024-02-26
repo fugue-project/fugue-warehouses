@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any, Dict
 
@@ -9,6 +10,8 @@ _FUGUE_SF_CONF_PREFIX = "fugue.sf."
 FUGUE_SF_CONF_PACKAGES = "fugue.sf.packages"
 FUGUE_SF_CONF_IMPORTS = "fugue.sf.imports"
 FUGUE_SF_CONF_CASE_SENSITIVE = "fugue.sf.case_sensitive"
+
+FUGUE_SF_LOGGER = logging.getLogger("fugue_snowflake")
 
 
 def get_client_init_params(conf: Any) -> Dict[str, Any]:

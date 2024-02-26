@@ -15,6 +15,7 @@ from ._utils import is_sf_ibis_table
 from .client import SnowflakeClient
 from .dataframe import SnowflakeDataFrame
 from .execution_engine import SnowflakeExecutionEngine, SnowflakeSQLEngine
+from .tester import SnowflakeTestBackend  # noqa: F401  # pylint: disable-all
 
 _is_sf = namespace_candidate("sf", lambda x: isinstance(x, str))
 
@@ -34,8 +35,10 @@ def _parse_sf_creator(query: Tuple[str, str]):
 
 
 @parse_execution_engine.candidate(
-    matcher=lambda engine, conf, **kwargs: isinstance(engine, str)
-    and (engine == "sf" or engine == "snowflake"),
+    matcher=lambda engine, conf, **kwargs: (
+        isinstance(engine, str) and (engine == "sf" or engine == "snowflake")
+    )
+    or isinstance(engine, SnowflakeClient),
     priority=2.5,
 )
 def _parse_sf(engine: str, conf: Any, **kwargs) -> ExecutionEngine:

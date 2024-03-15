@@ -38,7 +38,7 @@ class SnowflakeDataFrame(IbisDataFrame):
     def as_pandas(self) -> pd.DataFrame:
         return _sf_ibis_as_pandas(self.native)
 
-    def as_arrow(self, type_safe: bool) -> pa.Table:
+    def as_arrow(self, type_safe: bool = False) -> pa.Table:
         return _sf_ibis_as_arrow(self.native)
 
 

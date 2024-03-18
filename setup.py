@@ -32,19 +32,25 @@ setup(
     install_requires=[],
     extras_require={
         "bigquery": [
-            "fugue[ibis]>=0.8.4,<0.9",
+            "fugue[sql,ibis]>=0.9",
             "fs-gcsfs",
             "pandas-gbq",
             "google-auth",
             "db-dtypes",
-            "ibis-framework[bigquery]",
+            "ibis-framework[bigquery]<9",
         ],
         "trino": [
-            "fugue[ibis]>=0.8.4,<0.9",
-            "ibis-framework[trino]",
+            "fugue[sql,ibis]>=0.9",
+            "ibis-framework[trino]<9",
         ],
-        "ray": ["fugue[ray]>=0.8.4,<0.9"],
-        "snowflake": ["fugue[ibis]>=0.8.4,<0.9", "ibis-framework[snowflake]"],
+        "ray": ["fugue[ray]>=0.9"],
+        "snowflake": [
+            "fugue[sql,ibis]==0.9.0.dev3",
+            "ibis-framework[snowflake]<9",
+            "snowflake-connector-python[pandas]",
+            "snowflake-snowpark-python",
+            "snowflake-cli-labs",
+        ],
     },
     classifiers=[
         # "3 - Alpha", "4 - Beta" or "5 - Production/Stable"
@@ -55,6 +61,7 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3 :: Only",
     ],
     python_requires=">=3.8",
@@ -65,6 +72,9 @@ setup(
             "trino = fugue_trino.registry",
             "snowflake = fugue_snowflake.registry",
         ],
-        "ibis.backends": ["fugue_trino = fugue_trino.ibis_trino"],
+        "ibis.backends": [
+            "fugue_trino = fugue_trino.ibis_trino",
+            "fugue_snowflake = fugue_snowflake.ibis_snowflake",
+        ],
     },
 )

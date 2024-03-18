@@ -42,6 +42,9 @@ trinodocker:
 testtrino:
 	python3 -bb -m pytest tests/fugue_trino --cov=fugue_trino
 
+testsf:
+	python3 -bb -m pytest tests/fugue_snowflake --cov=fugue_snowflake
+
 lab:
 	mkdir -p tmp
 	pip install .

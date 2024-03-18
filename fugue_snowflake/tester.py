@@ -9,7 +9,7 @@ from .client import SnowflakeClient
 @ft.fugue_test_backend
 class SnowflakeTestBackend(ft.FugueTestBackend):
     name = "snowflake"
-    default_fugue_conf: Dict[str, Any] = {}
+    default_fugue_conf: Dict[str, Any] = {"fugue.sf.packages": "pytest"}
 
     @classmethod
     @contextmanager

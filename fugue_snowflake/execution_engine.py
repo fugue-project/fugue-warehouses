@@ -57,6 +57,9 @@ class SnowflakeSQLEngine(IbisSQLEngine):
             SnowflakeClient.get_or_create(self.conf) if client is None else client
         )
 
+    def _dummy_window_order_by(self) -> str:
+        return "ORDER BY 1"
+
     @property
     def is_distributed(self) -> bool:
         return True
